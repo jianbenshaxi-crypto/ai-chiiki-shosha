@@ -647,6 +647,19 @@ const REGION_GROUPS = {
 };
 const FARM_REGIONS = ['能勢・豊能','北摂','大阪市','北河内','中河内','南河内','泉州','京都府','兵庫県','奈良県'];
 const PLACES = ['拠点P（豊中・共通受渡拠点）','拠点Q（能勢・道の駅）','亀岡集荷所'];
+// 受け渡し拠点のおおよその位置（町名からの参考値。正確な建物の住所ではない）
+const PLACE_COORDS = {
+  '拠点P（豊中・共通受渡拠点）': { lat: 34.78, lng: 135.47 },
+  '拠点Q（能勢・道の駅）': { lat: 34.95, lng: 135.47 },
+  '亀岡集荷所': { lat: 35.01, lng: 135.58 },
+};
+// 2点間のおおよその距離（km）。Haversine公式
+function distanceKm(a, b){
+  const R = 6371, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
+  const x = Math.sin(dLat/2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng/2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
 const OFF_REASONS = ['形の不揃い','サイズ不揃い','色むら','軽い表面傷'];
 const TABS = ['home','shop','farm','records','settings'];
 const MAX_SAVED = 30;
@@ -952,6 +965,7 @@ const whereLine = l =>`<span>📍 ${h(l.region)}</span><span>👨‍🌾 ${h(l.f
 // 飲食店側からの見え方（出品の確認画面のプレビュー、および食材をさがす一覧での表示）
 function previewCard(l, opts){
   const cta = opts && opts.cta ? `<button type="button" class="btn small btn-sub go" data-browse-build="${h(l.id)}">${h(opts.cta)}</button>` : '';
+  const dist = opts && opts.distText ? `<div class="cap">📍 ${h(opts.distText)}</div>` : '';
   return `<article class="mcard" style="--t:${tint(l.item)}">
     <div class="img">${thumb(l)}<div class="tags">${prodTags(l)}</div></div>
     <div class="body">
@@ -959,6 +973,7 @@ function previewCard(l, opts){
       <div class="where">${whereLine(l)}</div>
       <div class="pr"><b>¥${l.price.toLocaleString('ja-JP')}<span class="cap">/${h(l.unit)}</span></b><span class="left ${lowStock(l)?'hot':''}">残り${q(l.qty,l.unit)}</span></div>
       <div class="hand">🧺 ${h(fmtDate(l.date))}・${h(placeShort(l.place))}</div>
+      ${dist}
       ${cta}
     </div>
   </article>`;
@@ -968,11 +983,30 @@ function previewCard(l, opts){
 // 出会い・発見の楽しさを、既存データ（S.listings）をカードで眺められる形で伝える。
 // 仕入れ案の作成そのものは置き換えず、カードから入力画面の確認ステップへ橋渡しするだけ。
 let marcheItem = '', marcheRegion = '';
+// 現在地（取れたときだけ）。geoStatus: 'idle' | 'loading' | 'ok' | 'denied' | 'unsupported'
+let myCoords = null, geoStatus = 'idle';
+function placeDistText(place){
+  if(!myCoords) return null;
+  const c = PLACE_COORDS[place];
+  if(!c) return null;
+  const km = distanceKm(myCoords, c);
+  return `${placeShort(place)}まで約${km < 10 ? km.toFixed(1) : Math.round(km)}km`;
+}
 function marcheCards(){
   const open = openListings();
-  const filtered = open.filter(l => (!marcheItem || l.item === marcheItem) && (!marcheRegion || (REGION_GROUPS[marcheRegion] || []).includes(l.region)));
+  let filtered = open.filter(l => (!marcheItem || l.item === marcheItem) && (!marcheRegion || (REGION_GROUPS[marcheRegion] || []).includes(l.region)));
   if(!filtered.length) return '<p class="cap" style="padding:6px 2px">条件に合う出品が見つかりません。絞り込みを変えてみてください。</p>';
-  return `<div class="hscroll">${filtered.map(l => previewCard(l, {cta:'この食材で仕入れ案を作る →'})).join('')}</div>`;
+  if(myCoords){
+    const dist = l => PLACE_COORDS[l.place] ? distanceKm(myCoords, PLACE_COORDS[l.place]) : Infinity;
+    filtered = [...filtered].sort((a,b) => dist(a) - dist(b));
+  }
+  return `<div class="hscroll">${filtered.map(l => previewCard(l, {cta:'この食材で仕入れ案を作る →', distText: placeDistText(l.place)})).join('')}</div>`;
+}
+function geoButtonHtml(){
+  if(geoStatus === 'ok') return `<p class="cap">📍 現在地から近い順に並べています（拠点までのおおよその距離です）</p>`;
+  if(geoStatus === 'denied') return `<p class="cap">現在地を使えなかったため、通常の順番で表示しています。</p>`;
+  if(geoStatus === 'unsupported') return '';
+  return `<button type="button" class="link" id="mk-geo">📍 現在地から近い順に並べる</button>`;
 }
 function marcheSection(){
   const open = openListings();
@@ -984,6 +1018,7 @@ function marcheSection(){
       <select id="mk-item" aria-label="食材で絞り込む" class="${marcheItem ? 'on' : ''}">${opt(items, marcheItem, '食材：すべて')}</select>
       <select id="mk-region" aria-label="地域で絞り込む" class="${marcheRegion ? 'on' : ''}">${opt(Object.keys(REGION_GROUPS), marcheRegion, '地域：すべて')}</select>
     </div>
+    <div id="mk-geo-wrap">${geoButtonHtml()}</div>
     <div id="mk-out">${marcheCards()}</div>
   </section>`;
 }
@@ -1681,6 +1716,24 @@ document.addEventListener('click', ev => {
   if(ds.ex != null){ S.draft.text = ds.ex; S.draft.note = ''; save(); render(); return; }
   if(id === 'parse') return doParse();
   if(id === 'manual'){ S.draft.text = ($('#req-text')?.value || '').trim(); S.draft.req = clean({}); S.draft.note = '項目を選んで続けられます。'; S.draft.noteKind = 'ok'; S.step = 'confirm'; animate = true; save(); render(); return; }
+  if(id === 'mk-geo'){
+    if(!navigator.geolocation){ geoStatus = 'unsupported'; const w = $('#mk-geo-wrap'); if(w) w.innerHTML = geoButtonHtml(); return; }
+    geoStatus = 'loading'; t.disabled = true; t.textContent = '現在地を取得しています…';
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        myCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        geoStatus = 'ok';
+        const o = $('#mk-out'); if(o) o.innerHTML = marcheCards();
+        const w = $('#mk-geo-wrap'); if(w) w.innerHTML = geoButtonHtml();
+      },
+      () => {
+        geoStatus = 'denied';
+        const w = $('#mk-geo-wrap'); if(w) w.innerHTML = geoButtonHtml();
+      },
+      { timeout: 8000 }
+    );
+    return;
+  }
   if(ds.browseBuild){
     const l = byId(ds.browseBuild); if(!l) return;
     const region = Object.keys(REGION_GROUPS).find(k => (REGION_GROUPS[k] || []).includes(l.region)) || '';
