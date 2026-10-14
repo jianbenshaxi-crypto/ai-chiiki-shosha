@@ -191,6 +191,24 @@ main.enter{animation:fadeUp .35s ease both}
 .hscroll::-webkit-scrollbar{display:none}
 .hscroll>*{scroll-snap-align:start}
 
+/* ---------- 食材をさがす：スワイプデッキ ---------- */
+.deck-wrap{display:flex;flex-direction:column;align-items:center;gap:16px}
+.deck{position:relative;width:100%;max-width:360px;height:420px;touch-action:pan-y}
+.deck .mcard.swipe-card{position:absolute;inset:0;width:100%;height:100%;cursor:grab;user-select:none;transition:transform .3s ease,opacity .3s ease;box-shadow:var(--shadow-lift)}
+.deck .mcard.swipe-card:active{cursor:grabbing}
+.deck .mcard.swipe-card.behind{transform:scale(.96) translateY(10px);box-shadow:var(--shadow)}
+.deck .mcard.swipe-card .img{aspect-ratio:auto;flex:1}
+.deck .mcard.swipe-card .body{flex:none}
+.swipe-stamp{position:absolute;top:20px;padding:6px 14px;border-radius:10px;border:3px solid;font-weight:700;font-size:20px;letter-spacing:.08em;opacity:0;pointer-events:none;transition:opacity .1s}
+.swipe-stamp.like{left:16px;color:var(--green);border-color:var(--green);transform:rotate(-12deg)}
+.swipe-stamp.skip{right:16px;color:var(--ink-3);border-color:var(--ink-3);transform:rotate(12deg)}
+.swipe-actions{display:flex;gap:18px;align-items:center;justify-content:center}
+.swipe-actions button{width:62px;height:62px;border-radius:50%;border:2px solid var(--line);background:var(--card);font-size:26px;cursor:pointer;box-shadow:var(--shadow);transition:transform .15s}
+.swipe-actions button:active{transform:scale(.92)}
+.swipe-actions .skip-btn{color:var(--ink-3)}
+.swipe-actions .like-btn{color:var(--green);border-color:var(--green-soft);width:72px;height:72px;font-size:30px}
+.deck-empty{display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;padding:40px 20px;width:100%;max-width:360px}
+
 /* search */
 .search{display:flex;flex-direction:column;gap:12px}
 .search-box{display:flex;align-items:flex-start;gap:10px;background:var(--card);border:2px solid var(--line);border-radius:30px;padding:14px 18px;box-shadow:var(--shadow);transition:border-color .2s}
@@ -705,7 +723,7 @@ const reduceMotion = () => window.matchMedia && matchMedia('(prefers-reduced-mot
 // 画面の位置・下書き・作った仕入れ案・保存した案はこの端末のブラウザに保存する。
 const DEFAULT_TEXT = '明後日までに大阪近郊のトマトを10kg、多少形が悪くてもOK';
 const PASS_KEY = 'ai-chiiki-shosha-pass';
-function freshState(){ return {listings:[], planSeq:0, tab:'home', step:'input', draft:{text:DEFAULT_TEXT, req:null, note:''}, plan:null, saved:[], fdraft:null, visited:false}; }
+function freshState(){ return {listings:[], planSeq:0, tab:'home', step:'input', draft:{text:DEFAULT_TEXT, req:null, note:''}, plan:null, saved:[], liked:[], fdraft:null, visited:false}; }
 let S, server = {loaded:false, editLocked:false, shared:true, aiReady:false, error:''};
 function load(){
   let raw = null;
@@ -716,6 +734,7 @@ function load(){
   if(!TABS.includes(S.tab)) S.tab = 'home';
   if(!['input','confirm','result'].includes(S.step)) S.step = 'input';
   if(!Array.isArray(S.saved)) S.saved = [];
+  if(!Array.isArray(S.liked)) S.liked = [];
   if(S.fdraft && !S.fdraft.d) S.fdraft = null;
   if(S.fdraft){
     const fd = FD();
@@ -982,7 +1001,7 @@ function previewCard(l, opts){
 /* ---------- 食材をさがす（マッチングアプリ風のカード探索） ---------- */
 // 出会い・発見の楽しさを、既存データ（S.listings）をカードで眺められる形で伝える。
 // 仕入れ案の作成そのものは置き換えず、カードから入力画面の確認ステップへ橋渡しするだけ。
-let marcheItem = '', marcheRegion = '';
+let marcheItem = '', marcheRegion = '', marcheIdx = 0;
 // 現在地（取れたときだけ）。geoStatus: 'idle' | 'loading' | 'ok' | 'denied' | 'unsupported'
 let myCoords = null, geoStatus = 'idle';
 function placeDistText(place){
@@ -992,15 +1011,112 @@ function placeDistText(place){
   const km = distanceKm(myCoords, c);
   return `${placeShort(place)}まで約${km < 10 ? km.toFixed(1) : Math.round(km)}km`;
 }
-function marcheCards(){
+function marcheList(){
   const open = openListings();
   let filtered = open.filter(l => (!marcheItem || l.item === marcheItem) && (!marcheRegion || (REGION_GROUPS[marcheRegion] || []).includes(l.region)));
-  if(!filtered.length) return '<p class="cap" style="padding:6px 2px">条件に合う出品が見つかりません。絞り込みを変えてみてください。</p>';
   if(myCoords){
     const dist = l => PLACE_COORDS[l.place] ? distanceKm(myCoords, PLACE_COORDS[l.place]) : Infinity;
     filtered = [...filtered].sort((a,b) => dist(a) - dist(b));
   }
-  return `<div class="hscroll">${filtered.map(l => previewCard(l, {cta:'この食材で仕入れ案を作る →', distText: placeDistText(l.place)})).join('')}</div>`;
+  return filtered;
+}
+// スワイプで1枚ずつ確認するデッキ。カードのドラッグ・ボタン操作はbindDeck()で別途つなぐ。
+function swipeCard(l, behind){
+  return `<article class="mcard swipe-card${behind ? ' behind' : ''}" style="--t:${tint(l.item)}" data-swipe-id="${h(l.id)}">
+    <div class="img">${thumb(l)}<div class="tags">${prodTags(l)}</div>
+      ${behind ? '' : '<div class="swipe-stamp like" data-stamp="like">いいね</div><div class="swipe-stamp skip" data-stamp="skip">スキップ</div>'}
+    </div>
+    <div class="body">
+      <h3>${h(l.item)}${l.variety ? `<small>${h(l.variety)}</small>` : ''}</h3>
+      <div class="where">${whereLine(l)}</div>
+      <div class="pr"><b>¥${l.price.toLocaleString('ja-JP')}<span class="cap">/${h(l.unit)}</span></b><span class="left ${lowStock(l)?'hot':''}">残り${q(l.qty,l.unit)}</span></div>
+      <div class="hand">🧺 ${h(fmtDate(l.date))}・${h(placeShort(l.place))}</div>
+      ${placeDistText(l.place) ? `<div class="cap">📍 ${h(placeDistText(l.place))}</div>` : ''}
+    </div>
+  </article>`;
+}
+function deckHtml(){
+  const list = marcheList();
+  if(!list.length) return `<div class="deck-empty"><div class="big" aria-hidden="true">🧺</div><p class="cap">条件に合う出品が見つかりません。絞り込みを変えてみてください。</p></div>`;
+  if(marcheIdx >= list.length) return `<div class="deck-empty"><div class="big" aria-hidden="true">🎉</div><p>ここまでの食材をすべて確認しました。</p><button type="button" class="btn btn-sub" id="mk-restart">もう一度最初から見る</button></div>`;
+  const l = list[marcheIdx], next = list[marcheIdx + 1];
+  return `<div class="deck-wrap">
+    <div class="deck" id="mk-deck">${next ? swipeCard(next, true) : ''}${swipeCard(l, false)}</div>
+    <div class="swipe-actions">
+      <button type="button" id="mk-skip" aria-label="スキップ" class="skip-btn">✕</button>
+      <button type="button" id="mk-like" aria-label="いいね" class="like-btn">♥</button>
+    </div>
+    <p class="cap">カードをドラッグ、またはボタンでスキップ／いいね。タップで詳細を確認できます。</p>
+  </div>`;
+}
+// いいね・スキップの確定処理。animate=trueのときだけ、カードが飛んでいく見た目をつける
+// （シートから閉じて進める場合は、カードが隠れているのでアニメーションなしで進める）。
+function advanceDeck(dir){
+  const doAdvance = () => { marcheIdx++; const o = $('#mk-out'); if(o){ o.innerHTML = deckHtml(); bindDeck(); } };
+  const card = dir ? document.querySelector('#mk-deck .mcard.swipe-card:not(.behind)') : null;
+  if(card){
+    card.style.transform = `translateX(${dir*600}px) rotate(${dir*24}deg)`;
+    card.style.opacity = '0';
+    setTimeout(doAdvance, 260);
+  } else doAdvance();
+}
+function likeCurrent(animate){
+  const list = marcheList(), l = list[marcheIdx];
+  if(l && !S.liked.includes(l.id)) S.liked.push(l.id);
+  save();
+  advanceDeck(animate ? 1 : 0);
+}
+function skipCurrent(animate){ advanceDeck(animate ? -1 : 0); }
+function openListingSheet(id){ if(!id) return; sheetMode = 'listing'; sheetId = id; renderSheet(); }
+function listingSheet(){
+  const l = byId(sheetId);
+  if(!l) return '';
+  const liked = S.liked.includes(l.id);
+  return sheetFrame('食材の詳細', plainTop(`${art(l.item)} ${h(l.item)}`), `
+    ${previewCard(l, {distText: placeDistText(l.place)})}
+    <div class="row">
+      <button type="button" class="btn grow" id="sheet-skip">スキップ</button>
+      <button type="button" class="btn grow${liked ? '' : ' btn-main'}" id="sheet-like"${liked ? ' disabled' : ''}>${liked ? '♥ いいね済み' : '♥ いいね'}</button>
+    </div>
+    <button type="button" class="btn btn-sub" data-browse-build="${h(l.id)}">この食材で仕入れ案を作る →</button>
+  `);
+}
+// カードのドラッグ操作。縦スクロールは妨げず（touch-action:pan-y）、横方向だけ追従させる。
+function bindDeck(){
+  const card = document.querySelector('#mk-deck .mcard.swipe-card:not(.behind)');
+  if(!card) return;
+  const likeStamp = card.querySelector('[data-stamp="like"]');
+  const skipStamp = card.querySelector('[data-stamp="skip"]');
+  const THRESHOLD = 100;
+  let dragging = false, moved = false, startX = 0, startY = 0, dx = 0;
+  card.addEventListener('pointerdown', (e) => {
+    dragging = true; moved = false; startX = e.clientX; startY = e.clientY; dx = 0;
+    card.style.transition = 'none';
+    try { card.setPointerCapture(e.pointerId); } catch(err) {}
+  });
+  card.addEventListener('pointermove', (e) => {
+    if(!dragging) return;
+    dx = e.clientX - startX;
+    if(Math.abs(dx) > 6 || Math.abs(e.clientY - startY) > 6) moved = true;
+    card.style.transform = `translateX(${dx}px) rotate(${dx/18}deg)`;
+    if(likeStamp) likeStamp.style.opacity = String(Math.max(0, Math.min(1, dx / THRESHOLD)));
+    if(skipStamp) skipStamp.style.opacity = String(Math.max(0, Math.min(1, -dx / THRESHOLD)));
+  });
+  const onUp = () => {
+    if(!dragging) return;
+    dragging = false;
+    card.style.transition = '';
+    if(dx > THRESHOLD) likeCurrent(true);
+    else if(dx < -THRESHOLD) skipCurrent(true);
+    else {
+      card.style.transform = '';
+      if(likeStamp) likeStamp.style.opacity = '0';
+      if(skipStamp) skipStamp.style.opacity = '0';
+      if(!moved) openListingSheet(card.dataset.swipeId);
+    }
+  };
+  card.addEventListener('pointerup', onUp);
+  card.addEventListener('pointercancel', onUp);
 }
 function geoButtonHtml(){
   if(geoStatus === 'ok') return `<p class="cap">📍 現在地から近い順に並べています（拠点までのおおよその距離です）</p>`;
@@ -1019,7 +1135,7 @@ function marcheSection(){
       <select id="mk-region" aria-label="地域で絞り込む" class="${marcheRegion ? 'on' : ''}">${opt(Object.keys(REGION_GROUPS), marcheRegion, '地域：すべて')}</select>
     </div>
     <div id="mk-geo-wrap">${geoButtonHtml()}</div>
-    <div id="mk-out">${marcheCards()}</div>
+    <div id="mk-out">${deckHtml()}</div>
   </section>`;
 }
 
@@ -1120,6 +1236,7 @@ function renderSheet(){
   const el = $('#sheet');
   let html = '';
   if(sheetMode === 'menu' && sheetId) html = menuSheet();
+  if(sheetMode === 'listing' && sheetId) html = listingSheet();
   if(!html){ closeSheet(); return; }
   const scrollTop = el.querySelector('.sheet')?.scrollTop || 0;
   el.innerHTML = html;
@@ -1197,7 +1314,7 @@ function renderShop(){
   const app = $('#app'), names = ['希望を入力','条件を確認','仕入れ案'];
   if(S.step === 'confirm' && S.draft.req) app.innerHTML = stepsBar(names,1) + confirmView();
   else if(S.step === 'result' && S.plan) app.innerHTML = stepsBar(names,2) + resultView();
-  else { S.step = 'input'; app.innerHTML = inputView(); }
+  else { S.step = 'input'; app.innerHTML = inputView(); bindDeck(); }
 }
 function inputView(){
   const ex = ['明後日までに大阪近郊のトマトを10kg、多少形が悪くてもOK','明日、北摂でなすを6kg。規格外は不可','明日までに万願寺とうがらしを2.5kg、1kg 1300円まで'];
@@ -1412,14 +1529,21 @@ function checkSaved(s){
   const same = now.status === s.status && sig(p && p.picks) === sig(s.picks);
   return {kind: same ? 'same' : 'changed', summary: summarize(now, s.req), ok: now.status === 'ok'};
 }
+function likedSectionHtml(){
+  const liked = S.liked.map(byId).filter(Boolean);
+  return `<section class="sec">
+    <div class="sec-h"><h2 class="sec-title">❤️ いいねした食材</h2>${liked.length ? `<span class="cap">${liked.length}件</span>` : ''}</div>
+    ${liked.length
+      ? `<div class="hscroll">${liked.map(l => `<div>${previewCard(l, {cta:'この食材で仕入れ案を作る →'})}<button type="button" class="btn small" style="width:100%;margin-top:6px" data-unlike="${h(l.id)}">いいねを外す</button></div>`).join('')}</div>`
+      : `<p class="cap">まだありません。「食材をさがす」でカードを右にスワイプ（またはハートのボタン）すると、ここに残ります。</p>`}
+  </section>`;
+}
 function renderRecords(){
-  if(!S.saved.length){
-    $('#app').innerHTML = `${pageHead('記録 📖', '保存した仕入れ案を、取引相談の候補として残せます。')}
-      <section class="card empty"><div class="big">📖</div><p>保存した仕入れ案はまだありません。</p><p class="cap">仕入れ案の画面で「この案を保存して取引相談へ」を押すと、ここに残ります。保存しても在庫は確保されません。</p>
-      <button type="button" class="btn btn-main" style="width:auto" data-go="find">仕入れ案を作る →</button></section>`;
-    return;
-  }
-  $('#app').innerHTML = `${pageHead('記録 📖', '保存した案を、いまの在庫で計算し直して表示しています。保存は注文・在庫予約ではありません。')}
+  const savedSection = !S.saved.length
+    ? `<section class="sec"><h2 class="sec-title">📖 保存した仕入れ案</h2>
+      <div class="card empty"><div class="big">📖</div><p>保存した仕入れ案はまだありません。</p><p class="cap">仕入れ案の画面で「この案を保存して取引相談へ」を押すと、ここに残ります。保存しても在庫は確保されません。</p>
+      <button type="button" class="btn btn-main" style="width:auto" data-go="find">仕入れ案を作る →</button></div></section>`
+    : `<section class="sec"><h2 class="sec-title">📖 保存した仕入れ案</h2>
     <div class="lst">${S.saved.map((s,i) => {
       const c = checkSaved(s), u = s.req.unit;
       const tag = c.kind === 'past' ? '<span class="tag">希望日を過ぎました</span>'
@@ -1434,7 +1558,8 @@ function renderRecords(){
         ${s0 ? `<div class="cap">受け渡し：${h(s0.date)} ${h(s0.time)}・${h(s0.place)}</div>` : ''}
         ${c.kind === 'changed' ? `<div class="msg warn">いまの在庫では：${h(c.summary)}</div>` : ''}
         <div class="row">${c.kind !== 'past' ? `<button type="button" class="btn small btn-sub" data-reopen="${i}">この条件で開き直す</button>` : ''}<button type="button" class="btn small" data-del="${i}">削除</button></div>
-      </article>`; }).join('')}</div>`;
+      </article>`; }).join('')}</div></section>`;
+  $('#app').innerHTML = `${pageHead('記録 📖', '保存した案といいねした食材をまとめて見られます。保存・いいねは注文・在庫予約ではありません。')}${likedSectionHtml()}${savedSection}`;
 }
 
 /* ---------- producer ---------- */
@@ -1723,7 +1848,8 @@ document.addEventListener('click', ev => {
       (pos) => {
         myCoords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
         geoStatus = 'ok';
-        const o = $('#mk-out'); if(o) o.innerHTML = marcheCards();
+        marcheIdx = 0;
+        const o = $('#mk-out'); if(o){ o.innerHTML = deckHtml(); bindDeck(); }
         const w = $('#mk-geo-wrap'); if(w) w.innerHTML = geoButtonHtml();
       },
       () => {
@@ -1734,6 +1860,11 @@ document.addEventListener('click', ev => {
     );
     return;
   }
+  if(id === 'mk-like'){ likeCurrent(true); return; }
+  if(id === 'mk-skip'){ skipCurrent(true); return; }
+  if(id === 'mk-restart'){ marcheIdx = 0; const o = $('#mk-out'); if(o){ o.innerHTML = deckHtml(); bindDeck(); } return; }
+  if(id === 'sheet-skip'){ closeSheet(); skipCurrent(false); return; }
+  if(id === 'sheet-like'){ closeSheet(); likeCurrent(false); return; }
   if(ds.browseBuild){
     const l = byId(ds.browseBuild); if(!l) return;
     const region = Object.keys(REGION_GROUPS).find(k => (REGION_GROUPS[k] || []).includes(l.region)) || '';
@@ -1752,6 +1883,7 @@ document.addEventListener('click', ev => {
   // records
   if(ds.reopen != null){ const s = S.saved[+ds.reopen]; if(!s) return; S.draft.req = {...s.req, allowOffStated:true}; S.draft.note = ''; return buildPlan(s.req); }
   if(ds.del != null){ if(!armed(t, 'もう一度押すと削除')) return; S.saved.splice(+ds.del, 1); save(); render(); toast('保存した案を削除しました'); return; }
+  if(ds.unlike){ S.liked = S.liked.filter(id => id !== ds.unlike); save(); render(); toast('いいねを外しました'); return; }
 
   // producer wizard
   if(id === 'open-form'){ S.fdraft = {step:1, d:FD()}; wizErr = []; justAdded = null; animate = true; save(); render(); window.scrollTo(0,0); $('#f-farm')?.focus(); return; }
@@ -1852,7 +1984,8 @@ document.addEventListener('change', ev => {
   if(el.id === 'mk-item' || el.id === 'mk-region'){
     if(el.id === 'mk-item') marcheItem = el.value; else marcheRegion = el.value;
     el.classList.toggle('on', Boolean(el.value));
-    const o = $('#mk-out'); if(o) o.innerHTML = marcheCards();
+    marcheIdx = 0;
+    const o = $('#mk-out'); if(o){ o.innerHTML = deckHtml(); bindDeck(); }
     return;
   }
   // 次回から：同じ農家名の前回の出品条件を読み込み、変更できるようにする
