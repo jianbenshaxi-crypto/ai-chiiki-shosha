@@ -12,6 +12,7 @@ const routes = {
   '/api/listings': () => import('./api/listings.js'),
   '/api/parse': () => import('./api/parse.js'),
   '/api/draft': () => import('./api/draft.js'),
+  '/api/auth': () => import('./api/auth.js'),
 };
 
 http.createServer(async (req, res) => {

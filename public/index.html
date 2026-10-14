@@ -365,6 +365,10 @@ details summary{cursor:pointer;font-size:15px;font-weight:700}
 .stepper select{width:auto;flex:0 0 auto}
 .stepper .unit{flex:0 0 auto;font-weight:700}
 .field .qty{justify-content:center}
+/* ログイン画面・ユーザー設定 */
+.auth-form{display:flex;flex-direction:column;gap:14px}
+.btn.settings-link{width:100%;display:flex;align-items:center;justify-content:center;gap:8px;min-height:52px}
+.settings-h{margin:10px 4px -4px}
 .lines{list-style:none;margin:0;padding:0;font-size:14.5px;display:flex;flex-direction:column;gap:2px}
 .lines li{display:flex;justify-content:space-between;gap:12px}
 
@@ -685,7 +689,8 @@ function distanceKm(a, b){
   return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 const OFF_REASONS = ['形の不揃い','サイズ不揃い','色むら','軽い表面傷'];
-const TABS = ['home','shop','farm','records','settings'];
+const TABS = ['home','shop','farm','records','settings','login'];
+const ROLE_LABEL = {farm:'農家', shop:'飲食店'};
 const MAX_SAVED = 30;
 // AIの接続状態。未設定なのに使えるように見せない
 function aiStatus(){
@@ -754,17 +759,34 @@ function save(){ try { const {listings, _sugg, ...rest} = S; localStorage.setIte
 function applyData(d){ S.listings = d.listings || []; }
 const getPass = () => { try { return localStorage.getItem(PASS_KEY) || ''; } catch(e) { return ''; } };
 const setPass = v => { try { localStorage.setItem(PASS_KEY, v); } catch(e) {} };
+// ログイン状態。この端末にはトークンだけを保存し、誰でログインしているかは毎回サーバーに確かめる
+const SESSION_KEY = 'ai-chiiki-shosha-session';
+const getToken = () => { try { return localStorage.getItem(SESSION_KEY) || ''; } catch(e) { return ''; } };
+const setToken = v => { try { if(v) localStorage.setItem(SESSION_KEY, v); else localStorage.removeItem(SESSION_KEY); } catch(e) {} };
+let me = null, auth = {needsPasscode:false}, loginMode = 'login', signupRole = 'farm', authDraft = {};
+// 出品を変更できるか：パスコード未設定（ローカル確認）・管理者・自分の出品
+const canEdit = l => !server.editLocked || Boolean(getPass()) || Boolean(l.own);
+// ログインした農家は、アカウントの農家名で出品する
+const farmLocked = () => Boolean(me && me.role === 'farm' && !getPass());
+async function fetchMe(){
+  let r = null;
+  try { r = await api('/api/auth'); } catch(e) {}
+  if(!r || !r.ok) return;
+  me = r.data.user; auth = {needsPasscode:Boolean(r.data.signupNeedsPasscode)};
+  if(!me && getToken()) setToken('');
+}
 
 /* ---------- server data ---------- */
 async function api(path, body){
   const headers = {'Content-Type':'application/json'};
   const pc = getPass(); if(body && pc) headers['x-edit-passcode'] = pc;
+  const tk = getToken(); if(tk) headers['Authorization'] = 'Bearer ' + tk;
   const res = await fetch(path, {method: body ? 'POST' : 'GET', headers, body: body ? JSON.stringify(body) : undefined, cache:'no-store'});
   let data = {}; try { data = await res.json(); } catch(e) {}
   return {ok:res.ok, status:res.status, data};
 }
 // 入力中のフォームがある画面は、裏での在庫更新で描き直さない
-const editing = () => (S.tab === 'shop' && S.step !== 'result') || (S.tab === 'farm' && S.fdraft) || S.tab === 'settings' || Boolean(sheetId);
+const editing = () => (S.tab === 'shop' && S.step !== 'result') || (S.tab === 'farm' && S.fdraft) || S.tab === 'settings' || S.tab === 'login' || Boolean(sheetId);
 async function fetchListings(opts){
   let r = null;
   try { r = await api('/api/listings'); } catch(e) {}
@@ -779,7 +801,7 @@ async function mutate(body){
   let r = null;
   try { r = await api('/api/listings', body); } catch(e) {}
   if(!r){ toast('通信できませんでした。もう一度試してください'); return null; }
-  if(r.status === 401){ toast('編集用パスコードを入れてから操作してください'); go('settings'); $('#passcode')?.focus(); return null; }
+  if(r.status === 401){ toast('ログインしてから操作してください'); go('login'); return null; }
   if(!r.ok){ toast(`${r.data.error || '保存できませんでした'}（エラーコード ${r.status}）`, null, 'err'); return null; }
   applyData(r.data);
   return r.data;
@@ -965,8 +987,8 @@ function renderBar(){
 function render(){
   const app = $('#app');
   const errBox = server.error ? `<div class="msg err"><b>⚠️ ${h(server.error)}</b><div class="row" style="margin-top:8px"><button type="button" class="btn small" id="retry">もう一度読み込む</button></div></div>` : '';
-  if(!server.loaded && S.tab !== 'settings'){ renderBar(); app.innerHTML = errBox || SKELETON; return; }
-  ({home:renderHome, shop:renderShop, farm:renderFarm, records:renderRecords, settings:renderSettings})[S.tab]();
+  if(!server.loaded && S.tab !== 'settings' && S.tab !== 'login'){ renderBar(); app.innerHTML = errBox || SKELETON; return; }
+  ({home:renderHome, shop:renderShop, farm:renderFarm, records:renderRecords, settings:renderSettings, login:renderLogin})[S.tab]();
   renderBar();
   if(errBox) app.insertAdjacentHTML('afterbegin', errBox);
   if(animate){ app.classList.remove('enter'); void app.offsetWidth; app.classList.add('enter'); animate = false; }
@@ -1579,13 +1601,13 @@ function farmCard(l){
     <div class="lc-top"><div class="face">${thumb(l)}</div>
       <div class="grow"><h3 style="font-size:18px">${h(l.item)}${l.variety?`<small class="muted" style="font-size:12.5px;margin-left:6px">${h(l.variety)}</small>`:''}</h3><div class="where">${whereLine(l)}</div></div>
       <div class="price"><b style="font-size:19px">¥${l.price.toLocaleString('ja-JP')}</b><span>/${h(l.unit)}</span></div></div>
-    <div class="tags">${listingStatus(l)}${l.grade==='規格外'?`<span class="tag">規格外・${h(l.reason)}</span>`:''}${l.surplus?'<span class="tag">余剰</span>':''}${l.demo?'<span class="tag">サンプル</span>':''}</div>
+    <div class="tags">${listingStatus(l)}${l.own?'<span class="tag good">あなたの出品</span>':''}${l.grade==='規格外'?`<span class="tag">規格外・${h(l.reason)}</span>`:''}${l.surplus?'<span class="tag">余剰</span>':''}${l.demo?'<span class="tag">サンプル</span>':''}</div>
     <dl class="kv">
       <dt>受け渡し</dt><dd>${h(fmtDate(l.date))} ${h(l.from)}〜${h(l.to)}・${h(placeShort(l.place))}</dd>
       <dt>販売単位</dt><dd>最低${q(l.minQty,l.unit)}・${q(l.step,l.unit)}刻み</dd>
       <dt>更新</dt><dd class="cap" style="margin:0">${h(updText(l).replace(/^情報の更新：/, ''))}</dd>
     </dl>
-    <div class="qty"><span class="sec-label">販売可能量</span>
+    ${canEdit(l) ? `<div class="qty"><span class="sec-label">販売可能量</span>
       <span class="stepper">
         <button type="button" class="step" data-dec="${l.id}" aria-label="減らす">−</button>
         <input id="q-${l.id}" type="number" inputmode="decimal" min="0" max="999" step="${l.step}" value="${l.qty}" aria-label="${h(l.farm)} ${h(l.item)}の販売可能量">
@@ -1595,7 +1617,7 @@ function farmCard(l){
       <button type="button" class="btn small btn-sub" data-save="${l.id}">数量を変更</button>
     </div>
     <div class="qty"><span class="sec-label">出荷日</span><input id="qd-${l.id}" type="date" min="${iso(today0())}" value="${h(l.date)}" aria-label="${h(l.farm)} ${h(l.item)}の出荷日" style="width:auto"><button type="button" class="btn small btn-sub" data-savedate="${l.id}">出荷日を変更</button></div>
-    <div class="row"><button type="button" class="btn small" data-edit="${l.id}">✏️ 出品内容を編集</button><button type="button" class="btn small danger" data-ldel="${l.id}">🗑 削除</button><button type="button" class="btn small${l.active ? ' danger' : ' btn-sub'}" data-toggle="${l.id}">${l.active ? '公開を止める' : '公開を再開する'}</button></div>
+    <div class="row"><button type="button" class="btn small" data-edit="${l.id}">✏️ 出品内容を編集</button><button type="button" class="btn small danger" data-ldel="${l.id}">🗑 削除</button><button type="button" class="btn small${l.active ? ' danger' : ' btn-sub'}" data-toggle="${l.id}">${l.active ? '公開を止める' : '公開を再開する'}</button></div>` : '<p class="cap" style="margin:0">変更できるのは、出品した農家（ログイン中）と管理者だけです。</p>'}
   </article>`;
 }
 // 出品の状態：公開中／公開停止中／在庫なし／受け渡し日を過ぎています
@@ -1610,7 +1632,8 @@ function wizBody(step, d){
   const farms = [...new Set(S.listings.filter(l => !l.demo && !isDemoFarm(l.farm)).map(l=>l.farm))];
   if(step === 1) return `<h2 class="sec-title">${art(d.item)} 何を出品しますか？</h2>
     <div class="grid">
-      <div class="field full"><label for="f-farm">農家名</label><input id="f-farm" data-f="farm" list="farm-list" maxlength="30" value="${h(d.farm)}" placeholder="例：森の農園"><datalist id="farm-list">${farms.map(f=>`<option value="${h(f)}">`).join('')}</datalist></div>
+      ${farmLocked() ? `<div class="field full"><label for="f-farm">農家名</label><input id="f-farm" data-f="farm" value="${h(me.name)}" readonly><span class="cap">ログイン中の農家名で出品します（設定で変更できます）</span></div>`
+        : `<div class="field full"><label for="f-farm">農家名</label><input id="f-farm" data-f="farm" list="farm-list" maxlength="30" value="${h(d.farm)}" placeholder="例：森の農園"><datalist id="farm-list">${farms.map(f=>`<option value="${h(f)}">`).join('')}</datalist></div>`}
       <div class="field"><label for="f-item">食材</label><select id="f-item" data-f="item">${opt(ITEMS,d.item)}</select></div>
       <div class="field"><label for="f-variety">品種（任意）</label><input id="f-variety" data-f="variety" maxlength="20" value="${h(d.variety)}" placeholder="例：千両"></div>
       <div class="field"><label for="f-region">産地</label><select id="f-region" data-f="region">${opt(FARM_REGIONS,d.region)}</select></div>
@@ -1719,7 +1742,8 @@ function renderFarm(){
   $('#app').innerHTML = `
     ${pageHead('販売できるものを登録 🌾', '販売に回せる量を出品すると、ほかの農家さんの供給と組み合わされて飲食店の仕入れ案に使われます。')}
     ${added ? `<section class="card celebrate"><div class="big" aria-hidden="true">🎉</div><h2>出品できました！</h2><p class="muted">あなたの${h(added.item)} ${q(added.qty,added.unit)}は、飲食店の仕入れ案の計算に使われます。<br>数量の変更や公開停止は、下のカードからいつでもできます。</p></section>` : ''}
-    ${server.editLocked && !getPass() ? '<div class="msg warn">出品・数量変更には編集用パスコードが必要です。<button type="button" class="link" data-tab="settings">設定で入力する →</button></div>' : ''}
+    ${server.editLocked && !getPass() && !me ? '<div class="msg warn">出品・数量変更には農家アカウントでのログインが必要です。<button type="button" class="link" data-tab="login">ログインする →</button></div>' : ''}
+    ${server.editLocked && !getPass() && me && me.role !== 'farm' ? '<div class="msg warn">飲食店のアカウントでは出品できません。出品は農家のアカウントで行います。</div>' : ''}
     <button type="button" class="btn btn-main" id="open-form">食材を出品する ＋</button>
     ${items.map(it => `<section class="sec"><h2 class="group-h"><span aria-hidden="true">${art(it)}</span>${h(it)}<span class="cap">${ls.filter(l=>l.item===it).length}件</span></h2><div class="lst">${ls.filter(l=>l.item===it).map(farmCard).join('')}</div></section>`).join('')}`;
   if(flashId){ const el = document.getElementById('card-'+flashId); if(el) el.scrollIntoView({block:'center'}); flashId = null; }
@@ -1740,24 +1764,96 @@ function confetti(){
   }
 }
 
+/* ---------- login ---------- */
+const nameLabel = role => role === 'farm' ? '農家名' : '店名';
+// モードを切り替えて描き直しても、入力したユーザー名・名前は消さない（パスワードは残さない）
+const keepAuth = () => { for(const k of ['a-id','a-name']){ const el = $('#'+k); if(el) authDraft[k] = el.value; } };
+function renderLogin(){
+  const head = pageHead('ログイン 👤', 'ログインすると、自分の出品の管理やアカウントの設定ができます。仕入れ案はログインしなくても作れます。');
+  const settingsBtn = '<button type="button" class="btn settings-link" data-tab="settings"><span aria-hidden="true">⚙️</span>ユーザー設定</button>';
+  if(me){
+    $('#app').innerHTML = `${head}
+    <section class="card">
+      <p style="margin:0">${ROLE_LABEL[me.role]}「<b>${h(me.name)}</b>」でログインしています。</p>
+      <button type="button" class="btn" id="logout">ログアウト</button>
+    </section>
+    ${settingsBtn}`;
+    return;
+  }
+  const su = loginMode === 'signup';
+  $('#app').innerHTML = `${head}
+    <section class="card">
+      <div class="seg" role="group" aria-label="ログインか新規登録か">
+        <button type="button" data-lmode="login" aria-pressed="${!su}">ログイン</button>
+        <button type="button" data-lmode="signup" aria-pressed="${su}">新規登録</button>
+      </div>
+      <form id="auth-form" class="auth-form" novalidate>
+        ${su ? `<div class="field"><span class="sec-label">使い方</span><div class="seg" role="group" aria-label="使い方">
+            <button type="button" data-lrole="farm" aria-pressed="${signupRole === 'farm'}">🌱 農家</button>
+            <button type="button" data-lrole="shop" aria-pressed="${signupRole === 'shop'}">🍽️ 飲食店</button>
+          </div><span class="cap">農家は出品・在庫の管理、飲食店は仕入れ案づくりに使います</span></div>
+          <div class="field"><label for="a-name">${nameLabel(signupRole)}</label><input id="a-name" maxlength="30" autocomplete="organization" value="${h(authDraft['a-name'] || '')}" placeholder="${signupRole === 'farm' ? '例：森の農園' : '例：ビストロ豊中'}">${signupRole === 'farm' ? '<span class="cap">出品に表示されます</span>' : ''}</div>` : ''}
+        <div class="field"><label for="a-id">ユーザー名</label><input id="a-id" maxlength="20" autocomplete="username" autocapitalize="none" spellcheck="false" value="${h(authDraft['a-id'] || '')}" placeholder="例：mori-farm">${su ? '<span class="cap">半角の英小文字・数字・-・_ で3〜20文字</span>' : ''}</div>
+        <div class="field"><label for="a-pw">パスワード</label><input id="a-pw" type="password" maxlength="72" autocomplete="${su ? 'new-password' : 'current-password'}">${su ? '<span class="cap">8文字以上</span>' : ''}</div>
+        ${su && auth.needsPasscode ? '<div class="field"><label for="a-pc">編集用パスコード</label><input id="a-pc" type="password" autocomplete="off"><span class="cap">新規登録には、管理者から受け取ったパスコードが必要です</span></div>' : ''}
+        <div id="a-err" aria-live="polite"></div>
+        <button type="submit" class="btn btn-main" id="a-submit">${su ? '登録してログイン' : 'ログインする'}</button>
+      </form>
+    </section>
+    ${settingsBtn}`;
+}
+
 /* ---------- settings ---------- */
+function accountCard(){
+  if(!me) return `<section class="card">
+      <h2 class="sec-title">👤 アカウント</h2>
+      <p class="muted" style="margin:0">ログインしていません。ログインすると、自分の出品の管理と、農家名・店名・パスワードの変更ができます。</p>
+      <button type="button" class="btn btn-main" data-tab="login">ログイン・新規登録</button>
+    </section>`;
+  const nl = nameLabel(me.role);
+  return `<section class="card">
+      <h2 class="sec-title">👤 アカウント（ログイン中）</h2>
+      <dl class="kv"><dt>ユーザー名</dt><dd>${h(me.id)}</dd><dt>種別</dt><dd>${ROLE_LABEL[me.role]}</dd><dt>${nl}</dt><dd>${h(me.name)}</dd></dl>
+      <details><summary>${nl}を変更する</summary>
+        <div class="auth-form" style="margin-top:12px">
+          <div class="field"><label for="s-name">新しい${nl}</label><input id="s-name" maxlength="30" value="${h(me.name)}"></div>
+          <div class="field"><label for="s-name-pw">今のパスワード</label><input id="s-name-pw" type="password" autocomplete="current-password"></div>
+          ${me.role === 'farm' ? '<p class="cap" style="margin:0">あなたの出品に表示される農家名も変わります。</p>' : ''}
+          <button type="button" class="btn btn-sub" id="s-save-name">${nl}を変更する</button>
+        </div>
+      </details>
+      <details><summary>パスワードを変更する</summary>
+        <div class="auth-form" style="margin-top:12px">
+          <div class="field"><label for="s-pw-cur">今のパスワード</label><input id="s-pw-cur" type="password" autocomplete="current-password"></div>
+          <div class="field"><label for="s-pw-new">新しいパスワード（8文字以上）</label><input id="s-pw-new" type="password" maxlength="72" autocomplete="new-password"></div>
+          <p class="cap" style="margin:0">変更すると、ほかの端末ではログアウトされます。</p>
+          <button type="button" class="btn btn-sub" id="s-save-pw">パスワードを変更する</button>
+        </div>
+      </details>
+      <button type="button" class="btn" id="logout">ログアウト</button>
+    </section>`;
+}
 function renderSettings(){
   $('#app').innerHTML = `
     ${pageHead('設定 ⚙️')}
+    <h2 class="sec-label settings-h">ログインして使う設定</h2>
+    ${accountCard()}
+    <h2 class="sec-label settings-h">この端末の設定（ログインしなくても使えます）</h2>
     <section class="card">
       <h2 class="sec-title">🧺 このアプリでできること</h2>
       <p class="muted">飲食店の仕入れの希望と、複数の農家さんが登録した在庫を照らし合わせて、「誰から何をどれだけ仕入れるか」が分かる1つの仕入れ案を作ります。</p>
       <p class="cap">農家さんへの連絡・承認、在庫の確保、決済、配送、実際の受け渡しは行いません。仕入れ案はいつも「未確保・農家承認前」です。</p>
     </section>
     ${server.editLocked ? `<section class="card">
-      <h2 class="sec-title">🔑 編集用パスコード</h2>
-      <div class="field"><label for="passcode">生産者画面で出品・数量変更をするときに必要です</label><input id="passcode" type="password" autocomplete="off" value="${h(getPass())}"></div>
+      <h2 class="sec-title">🔑 編集用パスコード（管理者用）</h2>
+      <div class="field"><label for="passcode">すべての出品の変更と、デモデータを戻すときに使います</label><input id="passcode" type="password" autocomplete="off" value="${h(getPass())}"></div>
     </section>` : ''}
     <section class="card">
       <h2 class="sec-title">🔒 このアプリが保存する情報</h2>
       <dl class="kv">
         <dt>全端末で共有</dt><dd>出品・在庫（農家名・品目・品種・数量・単価・受け渡し日時と場所・最低販売量・販売刻み・規格外／余剰の区分）</dd>
-        <dt>この端末だけ</dt><dd>入力の下書き、いまの仕入れ案、記録に保存した案${server.editLocked ? '、編集用パスコード' : ''}</dd>
+        <dt>アカウント</dt><dd>ユーザー名・種別（農家／飲食店）・農家名または店名・パスワード（暗号化して保存し、元の文字列は保存しません）</dd>
+        <dt>この端末だけ</dt><dd>入力の下書き、いまの仕入れ案、記録に保存した案、ログイン状態${server.editLocked ? '、編集用パスコード' : ''}</dd>
         <dt>AIに送るもの</dt><dd>仕入れの希望文（条件の読み取り）、メニュー案を作るときに選んだ食材の品目・品種・区分。AIは在庫を読み書きしません</dd>
       </dl>
       <div>${aiStatus()}</div>
@@ -1894,7 +1990,7 @@ document.addEventListener('click', ev => {
   if(ds.unlike){ S.liked = S.liked.filter(id => id !== ds.unlike); save(); render(); toast('いいねを外しました'); return; }
 
   // producer wizard
-  if(id === 'open-form'){ S.fdraft = {step:1, d:FD()}; wizErr = []; justAdded = null; animate = true; save(); render(); window.scrollTo(0,0); $('#f-farm')?.focus(); return; }
+  if(id === 'open-form'){ S.fdraft = {step:1, d:{...FD(), ...(farmLocked() ? {farm:me.name} : {})}}; wizErr = []; justAdded = null; animate = true; save(); render(); window.scrollTo(0,0); $('#f-farm')?.focus(); return; }
   if((ds.fdec != null || ds.finc != null) && S.fdraft){
     const inp = $('#f-qty'), step = +S.fdraft.d.step > 0 ? +S.fdraft.d.step : 0.1;
     inp.value = Math.max(0, +((+inp.value || 0) + (ds.finc != null ? step : -step)).toFixed(1));
@@ -1956,6 +2052,30 @@ document.addEventListener('click', ev => {
     return;
   }
 
+  // login / account
+  if(ds.lmode){ keepAuth(); loginMode = ds.lmode; render(); $('#a-id')?.focus(); return; }
+  if(ds.lrole){ keepAuth(); signupRole = ds.lrole; render(); return; }
+  if(id === 'logout'){
+    t.disabled = true;
+    api('/api/auth', {op:'logout'}).catch(() => {}).finally(() => { setToken(''); me = null; render(); toast('ログアウトしました'); fetchListings({quiet:true}); });
+    return;
+  }
+  if(id === 's-save-name' || id === 's-save-pw'){
+    const nameMode = id === 's-save-name';
+    const body = nameMode ? {op:'update', name:$('#s-name').value, currentPassword:$('#s-name-pw').value}
+      : {op:'update', newPassword:$('#s-pw-new').value, currentPassword:$('#s-pw-cur').value};
+    if(!body.currentPassword){ toast('今のパスワードを入力してください'); return; }
+    t.disabled = true;
+    api('/api/auth', body).then(r => {
+      t.disabled = false;
+      if(!r.ok){ toast(r.data.error || '変更できませんでした', null, 'err'); return; }
+      if(r.data.token) setToken(r.data.token);
+      me = r.data.user; render();
+      toast(nameMode ? `${nameLabel(me.role)}を「${me.name}」に変更しました` : 'パスワードを変更しました。ほかの端末ではログアウトされます', null, 'ok');
+    }).catch(() => { t.disabled = false; toast('通信できませんでした。もう一度試してください'); });
+    return;
+  }
+
   // settings
   if(id === 'reset'){
     if(!armed(t, 'デモの出品だけを初期状態に戻します。もう一度押すと実行')) return;
@@ -2013,11 +2133,34 @@ document.addEventListener('keydown', ev => {
   }
 });
 
+document.addEventListener('submit', ev => {
+  if(ev.target.id !== 'auth-form') return;
+  ev.preventDefault();
+  const su = loginMode === 'signup', btn = $('#a-submit');
+  const body = su ? {op:'signup', role:signupRole, name:$('#a-name').value, loginId:$('#a-id').value, password:$('#a-pw').value, passcode:$('#a-pc')?.value || ''}
+    : {op:'login', loginId:$('#a-id').value, password:$('#a-pw').value};
+  const err = [];
+  if(su && !body.name.trim()) err.push(`${nameLabel(signupRole)}を入力してください`);
+  if(!body.loginId.trim()) err.push('ユーザー名を入力してください');
+  if(!body.password) err.push('パスワードを入力してください');
+  const showErr = list => { $('#a-err').innerHTML = `<ul class="err-list">${list.map(e => `<li>${h(e)}</li>`).join('')}</ul>`; };
+  if(err.length) return showErr(err);
+  btn.disabled = true;
+  api('/api/auth', body).then(r => {
+    btn.disabled = false;
+    if(!r.ok) return showErr([r.data.error || 'ログインできませんでした']);
+    setToken(r.data.token); me = r.data.user; authDraft = {}; loginMode = 'login';
+    toast(su ? `登録しました。「${me.name}」でログインしています` : `「${me.name}」でログインしました`, null, 'ok');
+    go(me.role === 'farm' ? 'farm' : 'home');
+  }).catch(() => { btn.disabled = false; showErr(['通信できませんでした。もう一度試してください']); });
+});
+
 load();
 firstVisit = !S.visited;
 S.visited = true;
 save(); render();
 fetchListings();
+fetchMe().then(() => { if(['login','settings','farm'].includes(S.tab)) render(); });
 // 別の端末で在庫が変わったら、仕入れ案・ホーム・記録の画面に反映する
 setInterval(() => { if(!document.hidden && server.loaded && !editing()) fetchListings({quiet:true}); }, 15000);
 document.addEventListener('visibilitychange', () => { if(!document.hidden && server.loaded) fetchListings({quiet:true}); });
