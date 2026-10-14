@@ -1129,7 +1129,7 @@ function renderHome(){
 
   const actions = `<section class="sec"><h2 class="sec-title">どちらで使いますか？</h2><div class="actions">
       <button type="button" class="act primary" data-go="find"><span class="l"><span class="emo" aria-hidden="true">🍽️</span>仕入れ案を作る（飲食店）</span><span class="arrow">→</span></button>
-      <button type="button" class="act stacked" data-go="sell"><span class="l"><span class="emo" aria-hidden="true">🌾</span><span class="act-txt">販売できるもの<br>を登録</span></span><span class="arrow">＋</span></button>
+      <button type="button" class="act stacked" data-go="sell"><span class="l"><span class="emo" aria-hidden="true">🌾</span><span class="act-txt">販売できるものを登録<br><small>（生産者）</small></span></span><span class="arrow">＋</span></button>
     </div></section>`;
 
   const farms = new Set(open.map(l => l.farm)).size;
