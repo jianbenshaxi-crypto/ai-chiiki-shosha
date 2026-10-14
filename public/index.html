@@ -357,8 +357,14 @@ details summary{cursor:pointer;font-size:15px;font-weight:700}
 .kv dd{margin:0}
 .qty{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px dashed var(--line);padding-top:14px}
 .qty input{width:86px;text-align:right;border:1.5px solid var(--line);border-radius:14px;padding:8px 12px;background:var(--bg);font-size:17px}
-.qty .step{width:42px;height:42px;border:1.5px solid var(--line);border-radius:50%;background:var(--card);font-size:20px;cursor:pointer;line-height:1;transition:transform .12s}
+.qty .step{width:48px;height:48px;flex:0 0 48px;border:1.5px solid var(--line);border-radius:50%;background:var(--card);color:var(--ink);font-size:22px;cursor:pointer;line-height:1;transition:transform .12s}
 .qty .step:active{transform:scale(.9)}
+/* ［－］ 数量 単位 ［＋］ を1つのまとまりにして、スマホでも折り返さない */
+.stepper{display:flex;align-items:center;gap:10px;flex-wrap:nowrap;min-width:0}
+.stepper input{flex:1 1 90px;min-width:0;max-width:140px}
+.stepper select{width:auto;flex:0 0 auto}
+.stepper .unit{flex:0 0 auto;font-weight:700}
+.field .qty{justify-content:center}
 .lines{list-style:none;margin:0;padding:0;font-size:14.5px;display:flex;flex-direction:column;gap:2px}
 .lines li{display:flex;justify-content:space-between;gap:12px}
 
@@ -1580,10 +1586,12 @@ function farmCard(l){
       <dt>更新</dt><dd class="cap" style="margin:0">${h(updText(l).replace(/^情報の更新：/, ''))}</dd>
     </dl>
     <div class="qty"><span class="sec-label">販売可能量</span>
-      <button type="button" class="step" data-dec="${l.id}" aria-label="減らす">−</button>
-      <input id="q-${l.id}" type="number" inputmode="decimal" min="0" max="999" step="${l.step}" value="${l.qty}" aria-label="${h(l.farm)} ${h(l.item)}の販売可能量">
-      <span>${h(l.unit)}</span>
-      <button type="button" class="step" data-inc="${l.id}" aria-label="増やす">＋</button>
+      <span class="stepper">
+        <button type="button" class="step" data-dec="${l.id}" aria-label="減らす">−</button>
+        <input id="q-${l.id}" type="number" inputmode="decimal" min="0" max="999" step="${l.step}" value="${l.qty}" aria-label="${h(l.farm)} ${h(l.item)}の販売可能量">
+        <span class="unit">${h(l.unit)}</span>
+        <button type="button" class="step" data-inc="${l.id}" aria-label="増やす">＋</button>
+      </span>
       <button type="button" class="btn small btn-sub" data-save="${l.id}">数量を変更</button>
     </div>
     <div class="qty"><span class="sec-label">出荷日</span><input id="qd-${l.id}" type="date" min="${iso(today0())}" value="${h(l.date)}" aria-label="${h(l.farm)} ${h(l.item)}の出荷日" style="width:auto"><button type="button" class="btn small btn-sub" data-savedate="${l.id}">出荷日を変更</button></div>
@@ -1614,12 +1622,12 @@ function wizBody(step, d){
   if(step === 2) return `<h2 class="sec-title">⚖️ どれだけ売れますか？</h2>
     <div class="grid">
       <div class="field full"><label for="f-qty">販売可能量</label>
-        <div class="qty">
+        <div class="qty"><div class="stepper">
           <button type="button" class="step" data-fdec aria-label="減らす">−</button>
           <input id="f-qty" class="big-input" data-f="qty" type="number" inputmode="decimal" min="0" step="${+d.step > 0 ? d.step : 0.1}" value="${h(d.qty)}" placeholder="0">
           <select id="f-unit" data-f="unit" aria-label="単位">${opt(UNITS,d.unit)}</select>
           <button type="button" class="step" data-finc aria-label="増やす">＋</button>
-        </div>
+        </div></div>
       </div>
       <div class="field"><label for="f-min">最低販売量</label><input id="f-min" data-f="minQty" type="number" inputmode="decimal" min="0.1" step="0.1" value="${h(d.minQty)}"></div>
       <div class="field"><label for="f-step">販売刻み</label><input id="f-step" data-f="step" type="number" inputmode="decimal" min="0.1" step="0.1" value="${h(d.step)}"></div>
@@ -1889,7 +1897,7 @@ document.addEventListener('click', ev => {
   if(id === 'open-form'){ S.fdraft = {step:1, d:FD()}; wizErr = []; justAdded = null; animate = true; save(); render(); window.scrollTo(0,0); $('#f-farm')?.focus(); return; }
   if((ds.fdec != null || ds.finc != null) && S.fdraft){
     const inp = $('#f-qty'), step = +S.fdraft.d.step > 0 ? +S.fdraft.d.step : 0.1;
-    inp.value = Math.max(0, +(+inp.value + (ds.finc != null ? step : -step)).toFixed(1));
+    inp.value = Math.max(0, +((+inp.value || 0) + (ds.finc != null ? step : -step)).toFixed(1));
     inp.dispatchEvent(new Event('input', {bubbles:true}));
     return;
   }
@@ -1920,7 +1928,7 @@ document.addEventListener('click', ev => {
   }
 
   // producer listings
-  if(ds.dec || ds.inc){ const l = byId(ds.dec || ds.inc), inp = $('#q-'+l.id); inp.value = Math.max(0, +(+inp.value + (ds.inc ? l.step : -l.step)).toFixed(1)); return; }
+  if(ds.dec || ds.inc){ const l = byId(ds.dec || ds.inc), inp = $('#q-'+l.id); inp.value = Math.max(0, +((+inp.value || 0) + (ds.inc ? l.step : -l.step)).toFixed(1)); return; }
   const toPlan = item => S.plan && S.plan.req.item === item ? {label:'仕入れ案を見る', run:()=>{ S.step = 'result'; go('shop'); }} : null;
   if(ds.save){
     const l = byId(ds.save), nv = +$('#q-'+l.id).value;
