@@ -21,12 +21,12 @@
 <style>
 /* A little Kansai marché: ivory paper, soft leaf green for actions, pale orange and a touch of yellow for warmth */
 :root{
-  --bg:#fbf7ee; --card:#fffdf8; --beige:#f5edde; --ink:#3b3a33; --ink-2:#6d685b; --ink-3:#958f7e; --line:#ece3d0;
-  --green:#557a5c; --green-ink:#ffffff; --green-soft:#e6eee3; --green-pale:#f2f6ef;
+  --bg:#f7f9f5; --card:#ffffff; --beige:#eef1ea; --ink:#2f332e; --ink-2:#6b7268; --ink-3:#95998f; --line:#e4e8de;
+  --green:#3f7a52; --green-ink:#ffffff; --green-soft:#e4f0e6; --green-pale:#f1f7f2;
   --orange:#b8642c; --orange-soft:#fdeadb; --yellow:#f3d77b; --yellow-soft:#fdf4d3;
   --f:"Zen Maru Gothic","Hiragino Maru Gothic ProN","Yu Gothic",sans-serif;
-  --shadow:0 2px 6px rgba(120,100,60,.06),0 10px 28px rgba(120,100,60,.08);
-  --shadow-lift:0 4px 10px rgba(120,100,60,.08),0 16px 36px rgba(120,100,60,.12);
+  --shadow:0 2px 6px rgba(40,50,40,.05),0 10px 24px rgba(40,50,40,.07);
+  --shadow-lift:0 4px 10px rgba(40,50,40,.07),0 16px 32px rgba(40,50,40,.1);
   --nav:70px; --side:236px; --tint-mix:100%;
 }
 @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
@@ -144,8 +144,8 @@ main.enter{animation:fadeUp .35s ease both}
 .act.primary{background:var(--green);border-color:var(--green);color:var(--green-ink);box-shadow:0 6px 16px color-mix(in srgb,var(--green) 26%,transparent)}
 .act.primary .emo{background:rgba(255,255,255,.2)}
 .act.primary .arrow{color:var(--green-ink)}
-.act.stacked{border-radius:24px;padding:16px 20px;border-width:2px;border-color:var(--orange-soft);background:var(--orange-soft)}
-.act.stacked:hover{border-color:var(--orange)}
+.act.stacked{border-radius:24px;padding:16px 20px;border-width:2px;border-color:var(--green-soft);background:var(--green-soft)}
+.act.stacked:hover{border-color:var(--green)}
 .act.stacked .emo{background:var(--card)}
 .act.stacked .act-txt{font-size:17px;line-height:1.5;text-align:left}
 .act.stacked .act-txt small{display:block;font-size:14.5px;font-weight:700;color:var(--ink-2)}
