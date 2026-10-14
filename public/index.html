@@ -144,6 +144,11 @@ main.enter{animation:fadeUp .35s ease both}
 .act.primary{background:var(--green);border-color:var(--green);color:var(--green-ink);box-shadow:0 6px 16px color-mix(in srgb,var(--green) 26%,transparent)}
 .act.primary .emo{background:rgba(255,255,255,.2)}
 .act.primary .arrow{color:var(--green-ink)}
+.act.stacked{border-radius:24px;padding:16px 20px;border-width:2px;border-color:var(--orange-soft);background:var(--orange-soft)}
+.act.stacked:hover{border-color:var(--orange)}
+.act.stacked .emo{background:var(--card)}
+.act.stacked .act-txt{font-size:17px;line-height:1.5;text-align:left}
+.act.stacked .act-txt small{display:block;font-size:12.5px;font-weight:500;color:var(--ink-2)}
 @media (min-width:700px){.actions{grid-template-columns:repeat(3,1fr)}.act{padding:14px 16px}}
 
 /* pick-of-the-day card */
@@ -940,8 +945,9 @@ const thumb = l => `<span aria-hidden="true">${art(l.item)}</span>`;
 // 情報の更新日時（在庫・価格を変えたときに記録。古い情報かどうかを判断できるように）
 const updText = l => { const t = l.updatedAt || l.editedAt || l.at; return t ? `情報の更新：${fmtAgo(t)}（${fmtStamp(t)}）` : '情報の更新日時：未記録'; };
 const whereLine = l =>`<span>📍 ${h(l.region)}</span><span>👨‍🌾 ${h(l.farm)}</span>`;
-// 飲食店側からの見え方（出品の確認画面のプレビュー）
-function previewCard(l){
+// 飲食店側からの見え方（出品の確認画面のプレビュー、および食材をさがす一覧での表示）
+function previewCard(l, opts){
+  const cta = opts && opts.cta ? `<button type="button" class="btn small btn-sub go" data-browse-build="${h(l.id)}">${h(opts.cta)}</button>` : '';
   return `<article class="mcard" style="--t:${tint(l.item)}">
     <div class="img">${thumb(l)}<div class="tags">${prodTags(l)}</div></div>
     <div class="body">
@@ -949,8 +955,33 @@ function previewCard(l){
       <div class="where">${whereLine(l)}</div>
       <div class="pr"><b>¥${l.price.toLocaleString('ja-JP')}<span class="cap">/${h(l.unit)}</span></b><span class="left ${lowStock(l)?'hot':''}">残り${q(l.qty,l.unit)}</span></div>
       <div class="hand">🧺 ${h(fmtDate(l.date))}・${h(placeShort(l.place))}</div>
+      ${cta}
     </div>
   </article>`;
+}
+
+/* ---------- 食材をさがす（マッチングアプリ風のカード探索） ---------- */
+// 出会い・発見の楽しさを、既存データ（S.listings）をカードで眺められる形で伝える。
+// 仕入れ案の作成そのものは置き換えず、カードから入力画面の確認ステップへ橋渡しするだけ。
+let marcheItem = '', marcheRegion = '';
+function marcheCards(){
+  const open = openListings();
+  const filtered = open.filter(l => (!marcheItem || l.item === marcheItem) && (!marcheRegion || (REGION_GROUPS[marcheRegion] || []).includes(l.region)));
+  if(!filtered.length) return '<p class="cap" style="padding:6px 2px">条件に合う出品が見つかりません。絞り込みを変えてみてください。</p>';
+  return `<div class="hscroll">${filtered.map(l => previewCard(l, {cta:'この食材で仕入れ案を作る →'})).join('')}</div>`;
+}
+function marcheSection(){
+  const open = openListings();
+  if(!open.length) return '';
+  const items = [...new Set(open.map(l => l.item))];
+  return `<section class="sec" style="margin-top:4px">
+    <h2 class="sec-title">🧺 いま出品されている食材をさがす</h2>
+    <div class="filters">
+      <select id="mk-item" aria-label="食材で絞り込む" class="${marcheItem ? 'on' : ''}">${opt(items, marcheItem, '食材：すべて')}</select>
+      <select id="mk-region" aria-label="地域で絞り込む" class="${marcheRegion ? 'on' : ''}">${opt(Object.keys(REGION_GROUPS), marcheRegion, '地域：すべて')}</select>
+    </div>
+    <div id="mk-out">${marcheCards()}</div>
+  </section>`;
 }
 
 /* ---------- limited menu (規格外・余剰も生かす) ---------- */
@@ -1098,7 +1129,7 @@ function renderHome(){
 
   const actions = `<section class="sec"><h2 class="sec-title">どちらで使いますか？</h2><div class="actions">
       <button type="button" class="act primary" data-go="find"><span class="l"><span class="emo" aria-hidden="true">🍽️</span>仕入れ案を作る（飲食店）</span><span class="arrow">→</span></button>
-      <button type="button" class="act" data-go="sell"><span class="l"><span class="emo" aria-hidden="true">🌾</span>販売できるものを登録（生産者）</span><span class="arrow">＋</span></button>
+      <button type="button" class="act stacked" data-go="sell"><span class="l"><span class="emo" aria-hidden="true">🌾</span><span class="act-txt">販売できるものを<br>登録<small>（生産者）</small></span></span><span class="arrow">＋</span></button>
     </div></section>`;
 
   const farms = new Set(open.map(l => l.farm)).size;
@@ -1139,7 +1170,8 @@ function inputView(){
     <button type="button" class="btn btn-main" id="parse" ${busy?'disabled':''}>${busy?'AIが条件を整理しています…':(server.aiReady ? 'AIで条件を整理する →' : 'この文章から条件を整理する →')}</button>
     <button type="button" class="link" id="manual" style="align-self:center">AIを使わずに項目を選んで入力する</button>
   </section>
-  ${server.aiReady ? '' : `<div>${aiStatus()}</div>`}`;
+  ${server.aiReady ? '' : `<div>${aiStatus()}</div>`}
+  ${marcheSection()}`;
 }
 function confirmView(){
   const r = S.draft.req, miss = k => (r[k] == null || r[k] === '') ? ' miss' : '';
@@ -1417,12 +1449,19 @@ function wizBody(step, d){
     <p class="cap">農家名を選ぶと、前回の条件を読み込みます。傷みや鮮度低下があるものは出品しないでください。</p>`;
   if(step === 2) return `<h2 class="sec-title">⚖️ どれだけ売れますか？</h2>
     <div class="grid">
-      <div class="field full"><label for="f-qty">販売可能量</label><div class="pair"><input id="f-qty" class="big-input" data-f="qty" type="number" inputmode="decimal" min="0.1" step="0.1" value="${h(d.qty)}" placeholder="0"><select id="f-unit" data-f="unit" aria-label="単位">${opt(UNITS,d.unit)}</select></div></div>
+      <div class="field full"><label for="f-qty">販売可能量</label>
+        <div class="qty">
+          <button type="button" class="step" data-fdec aria-label="減らす">−</button>
+          <input id="f-qty" class="big-input" data-f="qty" type="number" inputmode="decimal" min="0" step="${+d.step > 0 ? d.step : 0.1}" value="${h(d.qty)}" placeholder="0">
+          <select id="f-unit" data-f="unit" aria-label="単位">${opt(UNITS,d.unit)}</select>
+          <button type="button" class="step" data-finc aria-label="増やす">＋</button>
+        </div>
+      </div>
       <div class="field"><label for="f-min">最低販売量</label><input id="f-min" data-f="minQty" type="number" inputmode="decimal" min="0.1" step="0.1" value="${h(d.minQty)}"></div>
       <div class="field"><label for="f-step">販売刻み</label><input id="f-step" data-f="step" type="number" inputmode="decimal" min="0.1" step="0.1" value="${h(d.step)}"></div>
     </div>
     <div id="w-warn">${warnHtml(d)}</div>
-    <p class="cap">収穫総量ではなく、既存の注文分を除いて今回販売に回せる量を入れてください。</p>`;
+    <p class="cap">収穫総量ではなく、既存の注文分を除いて今回販売に回せる量を入れてください。＋－ボタンは「販売刻み」の量ずつ増減します。</p>`;
   if(step === 3) return `<h2 class="sec-title">💰 いくらで売りますか？</h2>
     <div class="field"><label for="f-price">単価（税込・1${h(d.unit)}あたり）</label><div class="pair"><input id="f-price" class="big-input" data-f="price" type="number" inputmode="numeric" min="1" value="${h(d.price)}" placeholder="0"><span style="align-self:center;flex:0 0 auto">円/${h(d.unit)}</span></div></div>
     <div id="w-total">${totalText(d)}</div>
@@ -1638,6 +1677,14 @@ document.addEventListener('click', ev => {
   if(ds.ex != null){ S.draft.text = ds.ex; S.draft.note = ''; save(); render(); return; }
   if(id === 'parse') return doParse();
   if(id === 'manual'){ S.draft.text = ($('#req-text')?.value || '').trim(); S.draft.req = clean({}); S.draft.note = '項目を選んで続けられます。'; S.draft.noteKind = 'ok'; S.step = 'confirm'; animate = true; save(); render(); return; }
+  if(ds.browseBuild){
+    const l = byId(ds.browseBuild); if(!l) return;
+    const region = Object.keys(REGION_GROUPS).find(k => (REGION_GROUPS[k] || []).includes(l.region)) || '';
+    S.draft.text = `${l.farm}の${l.item}を${q(l.qty,l.unit)}`;
+    S.draft.req = clean({item:l.item, qty:l.qty, unit:l.unit, deadline:l.date, dateMode:'by', region, place:l.place, allowOff:l.grade==='規格外', allowOffStated:l.grade==='規格外'});
+    S.draft.note = `${h(l.farm)}の${h(l.item)}をもとに条件を入れました。必要なところを直してください。`; S.draft.noteKind = 'ok';
+    S.step = 'confirm'; go('shop'); return;
+  }
   if(id === 'back-input'){ S.step = 'input'; S.draft.note = ''; animate = true; save(); render(); return; }
   if(id === 'build'){ const {r, err} = readConfirm(); if(err.length){ $('#c-err').innerHTML = `<ul class="err-list">${err.map(e=>`<li>${h(e)}</li>`).join('')}</ul>`; return; } S.draft.req = {...S.draft.req, ...r}; return buildPlan(r); }
   if(ds.sugg != null){ const s = S._sugg[+ds.sugg]; const r = {...S.plan.req, ...s.patch}; S.draft.req = {...r, allowOffStated:true}; return buildPlan(r); }
@@ -1651,6 +1698,12 @@ document.addEventListener('click', ev => {
 
   // producer wizard
   if(id === 'open-form'){ S.fdraft = {step:1, d:FD()}; wizErr = []; justAdded = null; animate = true; save(); render(); window.scrollTo(0,0); $('#f-farm')?.focus(); return; }
+  if((ds.fdec != null || ds.finc != null) && S.fdraft){
+    const inp = $('#f-qty'), step = +S.fdraft.d.step > 0 ? +S.fdraft.d.step : 0.1;
+    inp.value = Math.max(0, +(+inp.value + (ds.finc != null ? step : -step)).toFixed(1));
+    inp.dispatchEvent(new Event('input', {bubbles:true}));
+    return;
+  }
   if(id === 'w-cancel'){ S.fdraft = null; wizErr = []; animate = true; save(); render(); return; }
   if(id === 'w-prev'){ readWizard(); S.fdraft.step--; wizErr = []; animate = true; save(); render(); window.scrollTo(0,0); return; }
   if(ds.wstep){ S.fdraft.step = +ds.wstep; wizErr = []; animate = true; save(); render(); window.scrollTo(0,0); return; }
@@ -1739,6 +1792,12 @@ document.addEventListener('change', ev => {
   onField(ev);
   const el = ev.target;
   if(el.id === 'passcode'){ setPass(el.value.trim()); toast('🔑 パスコードをこの端末に保存しました'); return; }
+  if(el.id === 'mk-item' || el.id === 'mk-region'){
+    if(el.id === 'mk-item') marcheItem = el.value; else marcheRegion = el.value;
+    el.classList.toggle('on', Boolean(el.value));
+    const o = $('#mk-out'); if(o) o.innerHTML = marcheCards();
+    return;
+  }
   // 次回から：同じ農家名の前回の出品条件を読み込み、変更できるようにする
   if(el.id === 'f-farm' && S.fdraft){
     const prev = [...S.listings].reverse().find(l => l.farm === el.value.trim());
