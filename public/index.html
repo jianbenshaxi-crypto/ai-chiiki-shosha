@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ja">
+<html lang="ja" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
@@ -144,12 +144,16 @@ main.enter{animation:fadeUp .35s ease both}
 .act.primary{background:var(--green);border-color:var(--green);color:var(--green-ink);box-shadow:0 6px 16px color-mix(in srgb,var(--green) 26%,transparent)}
 .act.primary .emo{background:rgba(255,255,255,.2)}
 .act.primary .arrow{color:var(--green-ink)}
-.act.stacked{border-radius:24px;padding:16px 20px;border-width:2px;border-color:var(--green-soft);background:var(--green-soft)}
+.act.primary .act-txt small{color:rgba(255,255,255,.82)}
+/* 2行表示のボタン（仕入れ案を作る／販売できるものを登録）の高さ・余白・文字サイズをそろえる共通クラス */
+.act.two-line{border-radius:24px;padding:16px 20px;border-width:2px}
+.act.two-line .act-txt{font-size:17px;line-height:1.5;text-align:left}
+.act.two-line .act-txt small{display:block;font-size:14.5px;font-weight:700}
+.act.stacked{border-color:var(--green-soft);background:var(--green-soft)}
 .act.stacked:hover{border-color:var(--green)}
 .act.stacked .emo{background:var(--card)}
-.act.stacked .act-txt{font-size:17px;line-height:1.5;text-align:left}
-.act.stacked .act-txt small{display:block;font-size:14.5px;font-weight:700;color:var(--ink-2)}
-@media (min-width:700px){.actions{grid-template-columns:repeat(3,1fr)}.act{padding:14px 16px}}
+.act.stacked .act-txt small{color:var(--ink-2)}
+@media (min-width:700px){.actions{grid-template-columns:repeat(2,1fr)}.act{padding:14px 16px}}
 
 /* pick-of-the-day card */
 .pick{position:relative;background:var(--card);border-radius:28px;padding:22px;box-shadow:var(--shadow);border:1px solid var(--line);display:flex;flex-direction:column;gap:14px;overflow:hidden}
@@ -1128,8 +1132,8 @@ function renderHome(){
     </section>` : '';
 
   const actions = `<section class="sec"><h2 class="sec-title">どちらで使いますか？</h2><div class="actions">
-      <button type="button" class="act primary" data-go="find"><span class="l"><span class="emo" aria-hidden="true">🍽️</span>仕入れ案を作る（飲食店）</span><span class="arrow">→</span></button>
-      <button type="button" class="act stacked" data-go="sell"><span class="l"><span class="emo" aria-hidden="true">🌾</span><span class="act-txt">販売できるものを登録<br><small>（生産者）</small></span></span><span class="arrow">＋</span></button>
+      <button type="button" class="act primary two-line" data-go="find"><span class="l"><span class="emo" aria-hidden="true">🍽️</span><span class="act-txt">仕入れ案を作る<br><small>（飲食店）</small></span></span><span class="arrow">→</span></button>
+      <button type="button" class="act stacked two-line" data-go="sell"><span class="l"><span class="emo" aria-hidden="true">🌾</span><span class="act-txt">販売できるものを登録<br><small>（生産者）</small></span></span><span class="arrow">＋</span></button>
     </div></section>`;
 
   const farms = new Set(open.map(l => l.farm)).size;
