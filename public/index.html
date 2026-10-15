@@ -2313,9 +2313,15 @@ document.addEventListener('submit', ev => {
 load();
 firstVisit = !S.visited;
 S.visited = true;
+// ログイン画面を一番最初に表示する。トークンが無ければ確実に未ログインなので、
+// サーバーへの確認を待たずにログイン画面から始める（仕入れ案の続きなどは、ホームの「続きから」で引き続き再開できる）。
+if(!getToken()) S.tab = 'login';
 save(); render();
 fetchListings();
-fetchMe().then(() => { if(['login','settings','farm'].includes(S.tab)) render(); });
+fetchMe().then(() => {
+  if(me && S.tab === 'login'){ S.tab = 'home'; save(); }
+  if(['login','settings','farm','home'].includes(S.tab)) render();
+});
 // 別の端末で在庫が変わったら、仕入れ案・ホーム・記録の画面に反映する
 setInterval(() => { if(!document.hidden && server.loaded && !editing()) fetchListings({quiet:true}); }, 15000);
 document.addEventListener('visibilitychange', () => { if(!document.hidden && server.loaded) fetchListings({quiet:true}); });
