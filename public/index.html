@@ -855,7 +855,7 @@ const reduceMotion = () => window.matchMedia && matchMedia('(prefers-reduced-mot
 // 画面の位置・下書き・作った仕入れ案・保存した案はこの端末のブラウザに保存する。
 const DEFAULT_TEXT = '明後日までに大阪近郊のトマトを10kg、多少形が悪くてもOK';
 const PASS_KEY = 'ai-chiiki-shosha-pass';
-function freshState(){ return {listings:[], planSeq:0, tab:'home', step:'input', draft:{text:DEFAULT_TEXT, req:null, note:''}, plan:null, saved:[], liked:[], fdraft:null, visited:false}; }
+function freshState(){ return {listings:[], orders:[], planSeq:0, tab:'home', step:'input', draft:{text:DEFAULT_TEXT, req:null, note:''}, plan:null, saved:[], liked:[], fdraft:null, visited:false}; }
 let S, server = {loaded:false, editLocked:false, shared:true, aiReady:false, error:''};
 function load(){
   let raw = null;
@@ -874,10 +874,12 @@ function load(){
     if(!(S.fdraft.step >= 1 && S.fdraft.step <= 5)) S.fdraft.step = 1;
   }
   S.listings = [];
+  S.orders = [];
 }
-// 共有データ（出品・在庫）はサーバーが正。この端末には保存しない
-function save(){ try { const {listings, _sugg, ...rest} = S; localStorage.setItem(KEY, JSON.stringify(rest)); } catch(e) {} }
+// 共有データ（出品・在庫・依頼）はサーバーが正。この端末には保存しない
+function save(){ try { const {listings, orders, _sugg, ...rest} = S; localStorage.setItem(KEY, JSON.stringify(rest)); } catch(e) {} }
 function applyData(d){ S.listings = d.listings || []; }
+function applyOrdersData(d){ S.orders = d.orders || []; }
 const getPass = () => { try { return localStorage.getItem(PASS_KEY) || ''; } catch(e) { return ''; } };
 const setPass = v => { try { localStorage.setItem(PASS_KEY, v); } catch(e) {} };
 // ログイン状態。この端末にはトークンだけを保存し、誰でログインしているかは毎回サーバーに確かめる
@@ -895,6 +897,24 @@ async function fetchMe(){
   if(!r || !r.ok) return;
   me = r.data.user; auth = {needsPasscode:Boolean(r.data.signupNeedsPasscode)};
   if(!me && getToken()) setToken('');
+}
+// 仕入れ依頼（実際に農家に届く依頼）。ログインしていないと存在しないので、未ログイン時は空にする
+async function fetchOrders(opts){
+  if(!me){ S.orders = []; if(!opts?.quiet) render(); return; }
+  let r = null;
+  try { r = await api('/api/orders'); } catch(e) {}
+  if(!r || !r.ok) return;
+  applyOrdersData(r.data);
+  if(!opts?.quiet) render();
+}
+async function mutateOrder(body){
+  let r = null;
+  try { r = await api('/api/orders', body); } catch(e) {}
+  if(!r){ toast('通信できませんでした。もう一度試してください'); return null; }
+  if(r.status === 401){ toast('ログインしてから操作してください'); go('login'); return null; }
+  if(!r.ok){ toast(`${r.data.error || '保存できませんでした'}（エラーコード ${r.status}）`, null, 'err'); return null; }
+  applyOrdersData(r.data);
+  return r.data;
 }
 
 /* ---------- server data ---------- */
@@ -1283,6 +1303,46 @@ function boostSheet(){
     <button type="button" class="btn btn-main" data-boost-confirm="${h(l.id)}">この内容で申し込む</button>
   `);
 }
+// 仕入れ依頼（実際に農家に届く依頼）の送信確認。送るまでは何も相手に届かない。
+function openSendOrderSheet(){ if(!S.plan || !S.plan.result.best) return; sheetMode = 'order-send'; sheetId = 'send'; renderSheet(); }
+function sendOrderSheet(){
+  const P = S.plan; if(!P || !P.result.best) return '';
+  const { req: r, result: res } = P, u = r.unit, pick = res.best;
+  return sheetFrame('仕入れ依頼を送る', plainTop('📨 この内容で仕入れ依頼を送りますか？'), `
+    <p class="lead">依頼を送ると、農家さんごとに内容が届きます。農家さんが承認するまで取引は確定しません。</p>
+    <ul class="cv-legend" style="flex-direction:column;align-items:flex-start;gap:10px;list-style:none;padding:0;margin:0">
+      ${pick.picks.map(k => { const l = byId(k.id) || {}; return `<li>👨‍🌾 ${h(k.farm)}：${q(k.amt,u)}・${yen(k.cost)}（${h(fmtDate(l.date))} ${h(l.from)}〜${h(l.to)}・${h(placeShort(l.place))}）</li>`; }).join('')}
+    </ul>
+    <p class="cap">数量・価格は依頼時点の出品内容です。農家さんは、承認・辞退・条件変更のいずれかで返答します。条件変更があった場合は、あなたが内容を確認して承諾するまで確定しません。</p>
+    <p class="cap"><b>決済・配送の手配はこのアプリでは行いません。</b>確定後の受け渡しの進み具合は「記録」タブで確認できます。</p>
+    <button type="button" class="btn btn-main" id="order-send-submit">この内容で依頼を送る</button>
+  `);
+}
+function findOrderLine(sid){
+  const [orderId, lineId] = String(sid || '').split(':');
+  const order = S.orders.find(o => o.id === orderId);
+  const line = order && order.lines.find(l => l.id === lineId);
+  return { order, line };
+}
+// 農家側：条件変更の提案フォーム。送信するまで依頼の内容は変わらない。
+function openCounterSheet(orderId, lineId){ sheetMode = 'order-counter'; sheetId = `${orderId}:${lineId}`; renderSheet(); }
+function counterSheet(){
+  const { order, line } = findOrderLine(sheetId);
+  if(!order || !line) return '';
+  return sheetFrame('条件変更を提案', plainTop('✍️ 条件を変えて提案する'), `
+    <p class="lead">${h(order.shopName)}さんからの依頼に、数量・単価・受け渡し日時を変えて提案します。相手が承諾するまで依頼は確定しません。</p>
+    <div class="grid">
+      <div class="field full"><label for="oc-amt">提案する数量（${h(line.unit)}）</label><input id="oc-amt" type="number" inputmode="decimal" min="0.1" step="0.1" value="${line.requestedAmt}"></div>
+      <div class="field"><label for="oc-price">単価（円/${h(line.unit)}）</label><input id="oc-price" type="number" inputmode="numeric" min="1" value="${line.unitPrice}"></div>
+      <div class="field full"><label for="oc-date">受け渡し日</label><input id="oc-date" type="date" min="${iso(today0())}" value="${line.date}"></div>
+      <div class="field"><label for="oc-from">時間（から）</label><input id="oc-from" type="time" value="${line.from}"></div>
+      <div class="field"><label for="oc-to">時間（まで）</label><input id="oc-to" type="time" value="${line.to}"></div>
+      <div class="field full"><label for="oc-note">メモ（任意）</label><input id="oc-note" maxlength="200" placeholder="例：少し小ぶりになりますが品質は変わりません"></div>
+    </div>
+    <div id="oc-err" aria-live="polite"></div>
+    <button type="button" class="btn btn-main" data-counter-submit="${h(order.id)}:${h(line.id)}">この内容で提案する</button>
+  `);
+}
 // カードのドラッグ操作。縦スクロールは妨げず（touch-action:pan-y）、横方向だけ追従させる。
 function bindDeck(){
   const card = document.querySelector('#mk-deck .swipe-card:not(.behind)');
@@ -1442,6 +1502,8 @@ function renderSheet(){
   if(sheetMode === 'menu' && sheetId) html = menuSheet();
   if(sheetMode === 'listing' && sheetId) html = listingSheet();
   if(sheetMode === 'boost' && sheetId) html = boostSheet();
+  if(sheetMode === 'order-send' && sheetId) html = sendOrderSheet();
+  if(sheetMode === 'order-counter' && sheetId) html = counterSheet();
   if(!html){ closeSheet(); return; }
   const scrollTop = el.querySelector('.sheet')?.scrollTop || 0;
   el.innerHTML = html;
@@ -1690,16 +1752,23 @@ function resultView(){
   }
   const saved = S.saved.some(s => s.no === S.plan.no);
   const pick = res.best || res.partial;
+  const demoInIt = res.best && res.best.picks.some(k => (byId(k.id) || {}).demo);
+  const orderCta = !res.best ? '' : !me || me.role !== 'shop'
+    ? `<div class="msg warn">仕入れ依頼を送るには、飲食店アカウントでログインしてください。<button type="button" class="link" data-tab="login">ログインする →</button></div>`
+    : demoInIt
+    ? `<div class="msg warn">この案にはデモの出品が含まれているため、依頼を送れません。実在の農家アカウントの出品だけで仕入れ案を作ると、ここから依頼できます。</div>`
+    : `<button type="button" class="btn btn-main" id="order-send-open">📨 この内容で仕入れ依頼を送る →</button>`;
   return `${banner}
   <div class="cond"><span>条件：<b>${reqChips(r)}</b></span><button type="button" class="link" id="edit-cond-top" style="white-space:nowrap">変える</button></div>
   <article class="slip">
     <div class="slip-head ${res.status==='ok'?'ok':'bad'}"><div><div class="slip-no">仕入れ案 No.${h(S.plan.no)}</div><div class="verdict">${h(verdict)}</div></div>
       <div class="stamp" aria-label="状態：農家承認前・在庫未確保"><b>未確保</b><small>農家承認前</small></div></div>
     ${body}
-    <div class="foot"><span>この案は注文・在庫予約ではありません。同じ在庫が他店の案に入ることがあります。</span><span>農家さんへの連絡・承認、決済、配送は対象外です。</span></div>
+    <div class="foot"><span>この案はまだ注文・在庫予約ではありません。同じ在庫が他店の案に入ることがあります。</span><span>決済・配送の手配はこのアプリでは行いません。</span></div>
   </article>
   ${sg}
-  <button type="button" class="btn ${saved?'':'btn-main'}" id="save-plan" ${saved?'disabled':''}>${saved?'📖 記録に保存済み':'この案を保存して取引相談へ →'}</button>
+  ${orderCta}
+  <button type="button" class="btn ${saved || res.best ? '' : 'btn-main'}" id="save-plan" ${saved?'disabled':''}>${saved?'📖 記録に保存済み':'この案を保存だけしておく →'}</button>
   ${pick ? `<button type="button" class="ask-cta" id="plan-menu" style="background:var(--yellow-soft)"><span style="font-size:30px;width:44px;text-align:center" aria-hidden="true">🍳</span><span><b>この案の食材で限定メニュー案を考える</b><span>規格外・余剰の食材も生かせる料理例と、原価の目安を出します</span></span></button>` : ''}
   ${ex ? `<section class="card">${ex}</section>` : ''}
   <div class="row"><button type="button" class="btn grow" id="edit-cond">条件を変える</button><button type="button" class="btn grow" id="new-req">新しく作る</button></div>
@@ -1776,7 +1845,7 @@ function likedSectionHtml(){
 function renderRecords(){
   const savedSection = !S.saved.length
     ? `<section class="sec"><h2 class="sec-title">📖 保存した仕入れ案</h2>
-      <div class="card empty"><div class="big">📖</div><p>保存した仕入れ案はまだありません。</p><p class="cap">仕入れ案の画面で「この案を保存して取引相談へ」を押すと、ここに残ります。保存しても在庫は確保されません。</p>
+      <div class="card empty"><div class="big">📖</div><p>保存した仕入れ案はまだありません。</p><p class="cap">仕入れ案の画面で「この案を保存だけしておく」を押すと、ここに残ります。保存しても在庫は確保されません。</p>
       <button type="button" class="btn btn-main" style="width:auto" data-go="find">仕入れ案を作る →</button></div></section>`
     : `<section class="sec"><h2 class="sec-title">📖 保存した仕入れ案</h2>
     <div class="lst">${S.saved.map((s,i) => {
@@ -1794,7 +1863,7 @@ function renderRecords(){
         ${c.kind === 'changed' ? `<div class="msg warn">いまの在庫では：${h(c.summary)}</div>` : ''}
         <div class="row">${c.kind !== 'past' ? `<button type="button" class="btn small btn-sub" data-reopen="${i}">この条件で開き直す</button>` : ''}<button type="button" class="btn small" data-del="${i}">削除</button></div>
       </article>`; }).join('')}</div></section>`;
-  $('#app').innerHTML = `${pageHead('記録 📖', '保存した案といいねした食材をまとめて見られます。保存・いいねは注文・在庫予約ではありません。')}${likedSectionHtml()}${savedSection}`;
+  $('#app').innerHTML = `${pageHead('記録 📖', '保存した案といいねした食材をまとめて見られます。保存・いいねは注文・在庫予約ではありません。')}${sentOrdersSection()}${likedSectionHtml()}${savedSection}`;
 }
 
 /* ---------- producer ---------- */
@@ -1941,6 +2010,89 @@ function renderWizard(){
     ${step === 1 ? '<button type="button" class="link" id="w-cancel" style="align-self:center">やめる</button>' : '<button type="button" class="link" id="w-prev" style="align-self:center">戻る</button>'}
   </section>`;
 }
+
+/* ---------- orders（実際に農家に届く仕入れ依頼） ---------- */
+const ORDER_STATUS_LABEL = {
+  pending: {cls:'hot', text:'承認待ち'},
+  countered: {cls:'hot', text:'条件変更の提案あり'},
+  confirmed: {cls:'good', text:'取引確定'},
+  declined: {cls:'', text:'辞退されました'},
+  withdrawn: {cls:'', text:'取り下げ済み'},
+  delivered: {cls:'good', text:'配送完了・受け取り確認待ち'},
+  received: {cls:'good', text:'取引完了'},
+};
+// 農家向け（viewer='farm'）・飲食店向け（viewer='shop'）の両方で使う、依頼1件分のカード
+function orderLineCard(order, line, viewer){
+  const st = ORDER_STATUS_LABEL[line.status] || {cls:'', text:line.status};
+  const who = viewer === 'farm' ? `🍽️ ${h(order.shopName)}さんから` : `👨‍🌾 ${h(line.farmName)}さんへ`;
+  const qtyLine = line.confirmedAmt != null
+    ? `確定数量：<b>${q(line.confirmedAmt, line.unit)}</b>（依頼時点の数量：${q(line.requestedAmt, line.unit)}）`
+    : `依頼数量（収穫予定の数量）：<b>${q(line.requestedAmt, line.unit)}</b>`;
+  let actions = '';
+  if(viewer === 'farm' && line.status === 'pending'){
+    actions = `<div class="row">
+      <button type="button" class="btn small btn-main" data-order-approve="${order.id}:${line.id}">承認する</button>
+      <button type="button" class="btn small btn-sub" data-order-counter-open="${order.id}:${line.id}">条件を変えて提案</button>
+      <button type="button" class="btn small danger" data-order-decline="${order.id}:${line.id}">辞退する</button>
+    </div>`;
+  } else if(viewer === 'farm' && line.status === 'countered'){
+    const c = line.counter;
+    actions = `<p class="cap">あなたの提案：${q(c.amt,line.unit)}・${yen(c.unitPrice)}/${h(line.unit)}・${h(fmtDate(c.date))} ${h(c.from)}〜${h(c.to)}${c.note?`・${h(c.note)}`:''}（飲食店の確認待ち）</p>`;
+  } else if(viewer === 'farm' && line.status === 'confirmed'){
+    actions = `<button type="button" class="btn small btn-main" data-order-deliver="${order.id}:${line.id}">配送完了にする</button>`;
+  } else if(viewer === 'shop' && line.status === 'countered'){
+    const c = line.counter;
+    actions = `<div class="msg warn">条件変更の提案：${q(c.amt,line.unit)}・${yen(Math.round(c.amt*c.unitPrice))}（単価${yen(c.unitPrice)}/${h(line.unit)}）・${h(fmtDate(c.date))} ${h(c.from)}〜${h(c.to)}${c.note?`<br>メモ：${h(c.note)}`:''}</div>
+      <div class="row">
+        <button type="button" class="btn small btn-main" data-order-counter-accept="${order.id}:${line.id}">この条件で承諾する</button>
+        <button type="button" class="btn small btn-sub" data-order-counter-reject="${order.id}:${line.id}">見送る</button>
+      </div>`;
+  } else if(viewer === 'shop' && line.status === 'pending'){
+    actions = `<button type="button" class="btn small btn-sub" data-order-withdraw="${order.id}:${line.id}">依頼を取り下げる</button>`;
+  } else if(viewer === 'shop' && line.status === 'delivered'){
+    actions = `<button type="button" class="btn small btn-main" data-order-receive="${order.id}:${line.id}">受け取りを確認する</button>`;
+  } else if(viewer === 'shop' && (line.status === 'declined' || line.status === 'withdrawn')){
+    actions = `<button type="button" class="btn small btn-sub" data-order-reopen="${order.id}">同じ条件で仕入れ案を作り直す →</button>`;
+  }
+  return `<article class="card">
+    <div class="tags"><span class="tag ${st.cls}">${h(st.text)}</span></div>
+    <h3 style="font-size:16px">${who} ${h(line.item)}${line.variety?`（${h(line.variety)}）`:''}</h3>
+    <p class="cap">${qtyLine}・単価${yen(line.unitPrice)}/${h(line.unit)}</p>
+    <p class="cap">受け渡し：${h(fmtDate(line.date))} ${h(line.from)}〜${h(line.to)}・${h(placeShort(line.place))}</p>
+    ${line.status === 'declined' && line.declineReason ? `<p class="cap">理由：${h(line.declineReason)}</p>` : ''}
+    ${actions}
+  </article>`;
+}
+// 農家側：自分あての依頼の一覧（出品タブの上に表示）
+function incomingOrdersSection(){
+  if(!me || me.role !== 'farm') return '';
+  const lines = [];
+  for(const o of S.orders) for(const l of o.lines) lines.push({o, l});
+  if(!lines.length) return '';
+  lines.sort((a,b) => b.l.updatedAt - a.l.updatedAt);
+  return `<section class="sec"><h2 class="group-h">📥 受け取った仕入れ依頼<span class="cap">${lines.length}件</span></h2>
+    <div class="lst">${lines.map(({o,l}) => orderLineCard(o, l, 'farm')).join('')}</div></section>`;
+}
+// 飲食店側：自分が送った依頼の一覧（記録タブの上に表示）
+function sentOrdersSection(){
+  if(!me || me.role !== 'shop') return '';
+  const lines = [];
+  for(const o of S.orders) for(const l of o.lines) lines.push({o, l});
+  if(!lines.length) return '';
+  lines.sort((a,b) => b.l.updatedAt - a.l.updatedAt);
+  return `<section class="sec"><h2 class="group-h">📨 送った仕入れ依頼<span class="cap">${lines.length}件</span></h2>
+    <div class="lst">${lines.map(({o,l}) => orderLineCard(o, l, 'shop')).join('')}</div></section>`;
+}
+// 辞退・取り下げになった依頼と同じ条件で、仕入れ案の計算をやり直す（辞退した農家の分は、再計算で自然に別の候補に置き換わる）
+function reopenOrderReq(req){
+  S.draft.text = '';
+  S.draft.req = {item:req.item, qty:req.qty, unit:req.unit, deadline:req.deadline, dateMode:req.dateMode, region:req.region, maxPrice:req.maxPrice, allowOff:req.allowOff, place:req.place, outOfScope:null, unreadable:false};
+  S.draft.note = '以前の依頼と同じ条件を読み込みました。内容を確認して、仕入れ案を作り直してください。';
+  S.draft.noteKind = 'ok';
+  S.step = 'confirm'; animate = true; save();
+  go('shop');
+}
+
 function renderFarm(){
   if(S.fdraft) return renderWizard();
   const ls = [...S.listings].sort((a,b) => a.item.localeCompare(b.item,'ja') || a.date.localeCompare(b.date) || a.farm.localeCompare(b.farm,'ja'));
@@ -1952,6 +2104,7 @@ function renderFarm(){
     ${server.editLocked && !getPass() && !me ? '<div class="msg warn">出品・数量変更には農家アカウントでのログインが必要です。<button type="button" class="link" data-tab="login">ログインする →</button></div>' : ''}
     ${server.editLocked && !getPass() && me && me.role !== 'farm' ? '<div class="msg warn">飲食店のアカウントでは出品できません。出品は農家のアカウントで行います。</div>' : ''}
     <button type="button" class="btn btn-main btn-sell" id="open-form"><span class="t">販売できるものを<br>登録</span><span class="plus" aria-hidden="true">＋</span></button>
+    ${incomingOrdersSection()}
     ${items.map(it => `<section class="sec"><h2 class="group-h"><span aria-hidden="true">${art(it)}</span>${h(it)}<span class="cap">${ls.filter(l=>l.item===it).length}件</span></h2><div class="lst">${ls.filter(l=>l.item===it).map(farmCard).join('')}</div></section>`).join('')}`;
   if(flashId){ const el = document.getElementById('card-'+flashId); if(el) el.scrollIntoView({block:'center'}); flashId = null; }
 }
@@ -2096,6 +2249,7 @@ document.addEventListener('click', ev => {
 
   // limited menu
   if(id === 'plan-menu'){ const p = S.plan && (S.plan.result.best || S.plan.result.partial); return openMenu(p ? p.picks.map(k => k.id) : []); }
+  if(id === 'order-send-open') return openSendOrderSheet();
   if(ds.menuadd){ menuSel = [...new Set([...menuSel, ds.menuadd])]; return renderSheet(); }
   if(ds.menudel){ menuSel = menuSel.filter(x => x !== ds.menudel); return renderSheet(); }
   if(id === 'menu-ai'){
@@ -2286,12 +2440,120 @@ document.addEventListener('click', ev => {
     return;
   }
 
+  // 仕入れ依頼（実際に農家に届く依頼）
+  if(id === 'order-send-submit'){
+    const P = S.plan; const pick = P && P.result.best;
+    if(!pick){ closeSheet(); return; }
+    t.disabled = true;
+    mutateOrder({op:'create', req:{item:P.req.item, qty:P.req.qty, unit:P.req.unit, deadline:P.req.deadline, dateMode:P.req.dateMode, region:P.req.region, maxPrice:P.req.maxPrice, allowOff:P.req.allowOff, place:P.req.place}, picks:pick.picks.map(k => ({listingId:k.id, amt:k.amt}))}).then(res => {
+      t.disabled = false;
+      if(!res) return;
+      closeSheet();
+      toast('仕入れ依頼を送りました。農家さんの返答をお待ちください', {label:'記録を見る', run:() => go('records')}, 'ok');
+    });
+    return;
+  }
+  if(ds.orderCounterOpen){ const [orderId, lineId] = ds.orderCounterOpen.split(':'); return openCounterSheet(orderId, lineId); }
+  if(ds.counterSubmit){
+    const [orderId, lineId] = ds.counterSubmit.split(':');
+    const amt = Number($('#oc-amt')?.value), unitPrice = Number($('#oc-price')?.value);
+    const date = $('#oc-date')?.value || '', from = $('#oc-from')?.value || '', to = $('#oc-to')?.value || '';
+    const errEl = $('#oc-err'); const showErr = m => { if(errEl) errEl.innerHTML = `<ul class="err-list"><li>${h(m)}</li></ul>`; };
+    if(!(amt > 0 && amt <= 999)) return showErr('数量を正しく入力してください');
+    if(!(Number.isInteger(unitPrice) && unitPrice >= 1 && unitPrice <= 100000)) return showErr('単価は1〜100,000円の整数で入力してください');
+    if(!date || date < iso(today0())) return showErr('受け渡し日を今日以降で選んでください');
+    if(!from || !to || from >= to) return showErr('受渡時間の「から」を「まで」より前にしてください');
+    t.disabled = true;
+    mutateOrder({op:'respond', orderId, lineId, action:'counter', counter:{amt, unitPrice, date, from, to, note:$('#oc-note')?.value || ''}}).then(res => {
+      t.disabled = false;
+      if(!res) return;
+      closeSheet(); render();
+      toast('条件変更の提案を送りました。飲食店の確認をお待ちください', null, 'ok');
+    });
+    return;
+  }
+  if(ds.orderApprove){
+    if(!armed(t, 'もう一度押すと承認します')) return;
+    const [orderId, lineId] = ds.orderApprove.split(':');
+    t.disabled = true;
+    mutateOrder({op:'respond', orderId, lineId, action:'approve'}).then(res => {
+      t.disabled = false; if(!res) return; render();
+      toast('依頼を承認しました。飲食店に伝わります', null, 'ok');
+    });
+    return;
+  }
+  if(ds.orderDecline){
+    if(!armed(t, 'もう一度押すと辞退します')) return;
+    const [orderId, lineId] = ds.orderDecline.split(':');
+    t.disabled = true;
+    mutateOrder({op:'respond', orderId, lineId, action:'decline'}).then(res => {
+      t.disabled = false; if(!res) return; render();
+      toast('依頼を辞退しました', null, 'ok');
+    });
+    return;
+  }
+  if(ds.orderWithdraw){
+    if(!armed(t, 'もう一度押すと取り下げます')) return;
+    const [orderId, lineId] = ds.orderWithdraw.split(':');
+    t.disabled = true;
+    mutateOrder({op:'withdraw', orderId, lineId}).then(res => {
+      t.disabled = false; if(!res) return; render();
+      toast('依頼を取り下げました', null, 'ok');
+    });
+    return;
+  }
+  if(ds.orderReopen){
+    const o = S.orders.find(x => x.id === ds.orderReopen); if(!o) return;
+    reopenOrderReq(o.req);
+    return;
+  }
+  if(ds.orderCounterAccept){
+    if(!armed(t, 'もう一度押すとこの条件で確定します')) return;
+    const [orderId, lineId] = ds.orderCounterAccept.split(':');
+    t.disabled = true;
+    mutateOrder({op:'counter-reply', orderId, lineId, action:'accept'}).then(res => {
+      t.disabled = false; if(!res) return; render();
+      toast('条件変更を承諾し、取引を確定しました', null, 'ok');
+    });
+    return;
+  }
+  if(ds.orderCounterReject){
+    if(!armed(t, 'もう一度押すとこの提案を見送ります')) return;
+    const [orderId, lineId] = ds.orderCounterReject.split(':');
+    t.disabled = true;
+    mutateOrder({op:'counter-reply', orderId, lineId, action:'reject'}).then(res => {
+      t.disabled = false; if(!res) return; render();
+      toast('条件変更の提案を見送りました', null, 'ok');
+    });
+    return;
+  }
+  if(ds.orderDeliver){
+    if(!armed(t, 'もう一度押すと配送完了にします')) return;
+    const [orderId, lineId] = ds.orderDeliver.split(':');
+    t.disabled = true;
+    mutateOrder({op:'deliver', orderId, lineId}).then(res => {
+      t.disabled = false; if(!res) return; render();
+      toast('配送完了にしました。飲食店の受け取り確認をお待ちください', null, 'ok');
+    });
+    return;
+  }
+  if(ds.orderReceive){
+    if(!armed(t, 'もう一度押すと受け取り確認します')) return;
+    const [orderId, lineId] = ds.orderReceive.split(':');
+    t.disabled = true;
+    mutateOrder({op:'receive', orderId, lineId}).then(res => {
+      t.disabled = false; if(!res) return; render();
+      toast('受け取りを確認しました。取引はこれで完了です', null, 'ok');
+    });
+    return;
+  }
+
   // login / account
   if(ds.lmode){ keepAuth(); loginMode = ds.lmode; render(); $('#a-id')?.focus(); return; }
   if(ds.lrole){ keepAuth(); signupRole = ds.lrole; render(); return; }
   if(id === 'logout'){
     t.disabled = true;
-    api('/api/auth', {op:'logout'}).catch(() => {}).finally(() => { setToken(''); me = null; render(); toast('ログアウトしました'); fetchListings({quiet:true}); });
+    api('/api/auth', {op:'logout'}).catch(() => {}).finally(() => { setToken(''); me = null; S.orders = []; render(); toast('ログアウトしました'); fetchListings({quiet:true}); });
     return;
   }
   if(id === 's-save-name' || id === 's-save-pw'){
@@ -2385,6 +2647,7 @@ document.addEventListener('submit', ev => {
     if(!r.ok) return showErr([r.data.error || 'ログインできませんでした']);
     setToken(r.data.token); me = r.data.user; authDraft = {}; loginMode = 'login';
     toast(su ? `登録しました。「${me.name}」でログインしています` : `「${me.name}」でログインしました`, null, 'ok');
+    fetchOrders({quiet:true});
     go(me.role === 'farm' ? 'farm' : 'home');
   }).catch(() => { btn.disabled = false; showErr(['通信できませんでした。もう一度試してください']); });
 });
@@ -2399,11 +2662,13 @@ save(); render();
 fetchListings();
 fetchMe().then(() => {
   if(me && S.tab === 'login'){ S.tab = 'home'; save(); }
+  fetchOrders({quiet:true}).then(() => { if(['records','farm'].includes(S.tab)) render(); });
   if(['login','settings','farm','home'].includes(S.tab)) render();
 });
-// 別の端末で在庫が変わったら、仕入れ案・ホーム・記録の画面に反映する
-setInterval(() => { if(!document.hidden && server.loaded && !editing()) fetchListings({quiet:true}); }, 15000);
-document.addEventListener('visibilitychange', () => { if(!document.hidden && server.loaded) fetchListings({quiet:true}); });
+// 別の端末で在庫・依頼の状況が変わったら、仕入れ案・ホーム・記録の画面に反映する
+const refreshOrdersView = () => fetchOrders({quiet:true}).then(() => { if(!editing() && ['records','farm'].includes(S.tab)) render(); });
+setInterval(() => { if(!document.hidden && server.loaded && !editing()){ fetchListings({quiet:true}); refreshOrdersView(); } }, 15000);
+document.addEventListener('visibilitychange', () => { if(!document.hidden && server.loaded){ fetchListings({quiet:true}); refreshOrdersView(); } });
 })();
 </script>
 </body>

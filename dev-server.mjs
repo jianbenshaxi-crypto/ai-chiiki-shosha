@@ -13,6 +13,7 @@ const routes = {
   '/api/parse': () => import('./api/parse.js'),
   '/api/draft': () => import('./api/draft.js'),
   '/api/auth': () => import('./api/auth.js'),
+  '/api/orders': () => import('./api/orders.js'),
 };
 
 http.createServer(async (req, res) => {
