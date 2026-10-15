@@ -10,7 +10,7 @@ import { aiReady } from '../lib/ai.js';
 import { PASSCODE, currentUser, isAdmin } from '../lib/auth.js';
 
 const MAX_LISTINGS = 300;
-const OPS = new Set(['add', 'edit', 'qty', 'toggle', 'delete', 'reset']);
+const OPS = new Set(['add', 'edit', 'qty', 'toggle', 'delete', 'reset', 'boost-request']);
 
 function send(res, status, body) {
   res.setHeader('Cache-Control', 'no-store');
@@ -88,6 +88,18 @@ export default async function handler(req, res) {
         if (!l) return send(res, 404, { error: '出品が見つかりません。画面を読み込み直してください' });
         if (!mayEdit(l)) return notMine();
         l.active = !l.active;
+        l.v++; l.updatedAt = Date.now();
+        await setJSON(KEY, st);
+        return send(res, 200, payload(st, user));
+      }
+      // ブーストへの「申し込み」の意思表示を記録するだけの操作。
+      // 決済は行っていないため、ここでは active にしない（将来、支払い確認後に別途activeを立てる想定）。
+      case 'boost-request': {
+        const l = find(body.id);
+        if (!l) return send(res, 404, { error: '出品が見つかりません。画面を読み込み直してください' });
+        if (!mayEdit(l)) return notMine();
+        l.boostRequested = Boolean(body.requested);
+        l.boostRequestedAt = l.boostRequested ? Date.now() : null;
         l.v++; l.updatedAt = Date.now();
         await setJSON(KEY, st);
         return send(res, 200, payload(st, user));

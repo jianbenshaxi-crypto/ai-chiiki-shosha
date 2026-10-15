@@ -794,6 +794,8 @@ const REGION_GROUPS = {
 };
 const FARM_REGIONS = ['能勢・豊能','北摂','大阪市','北河内','中河内','南河内','泉州','京都府','兵庫県','奈良県'];
 const PLACES = ['拠点P（豊中・共通受渡拠点）','拠点Q（能勢・道の駅）','亀岡集荷所'];
+// 成約手数料は未確定・未実装。仕入れ案の費用から「参考値」を計算するためだけの仮の料率（実際の請求はしない）
+const COMMISSION_RATE_REF = 0.05;
 // 受け渡し拠点のおおよその位置（町名からの参考値。正確な建物の住所ではない）
 const PLACE_COORDS = {
   '拠点P（豊中・共通受渡拠点）': { lat: 34.78, lng: 135.47 },
@@ -1120,7 +1122,9 @@ function prodTags(l){
   return [
     lowStock(l) ? '<span class="tag hot">残りわずか</span>' : '',
     l.grade === '規格外' ? `<span class="tag">規格外</span>` : '',
-    l.surplus ? '<span class="tag">余剰</span>' : ''
+    l.surplus ? '<span class="tag">余剰</span>' : '',
+    // AIが選んだという意味ではなく、農家本人が掲載を希望している、という事実だけを伝える
+    l.boostRequested ? '<span class="tag">🚀 農家が掲載を希望</span>' : ''
   ].join('');
 }
 // 写真は扱わない。野菜のイラストで表示する
@@ -1160,12 +1164,17 @@ function placeDistText(place){
   const km = distanceKm(myCoords, c);
   return `${placeShort(place)}まで約${km < 10 ? km.toFixed(1) : Math.round(km)}km`;
 }
+// 表示順：条件に合うものだけに絞ったうえで、
+// ・現在地から近い順を選んでいるときはその並びをそのまま優先する（本人が選んだ並びを崩さない）
+// ・それ以外のときだけ、ブーストを申し込んだ出品を安定ソートで前方に寄せる（条件を満たさないものを混ぜたり、価格・数量・AIの提案内容を変えたりはしない）
 function marcheList(){
   const open = openListings();
   let filtered = open.filter(l => (!marcheItem || l.item === marcheItem) && (!marcheRegion || (REGION_GROUPS[marcheRegion] || []).includes(l.region)));
   if(myCoords){
     const dist = l => PLACE_COORDS[l.place] ? distanceKm(myCoords, PLACE_COORDS[l.place]) : Infinity;
     filtered = [...filtered].sort((a,b) => dist(a) - dist(b));
+  } else {
+    filtered = [...filtered].sort((a,b) => (b.boostRequested ? 1 : 0) - (a.boostRequested ? 1 : 0));
   }
   return filtered;
 }
@@ -1255,6 +1264,23 @@ function listingSheet(){
       <button type="button" class="btn grow${liked ? '' : ' btn-main'}" id="sheet-like"${liked ? ' disabled' : ''}>${liked ? '♥ いいね済み' : '♥ いいね'}</button>
     </div>
     <button type="button" class="btn btn-sub" data-browse-build="${h(l.id)}">この食材で仕入れ案を作る →</button>
+  `);
+}
+// ブースト（検討中の機能）の説明と申し込み。決済が無いため「申し込み＝支払い」ではないことを明記する。
+function openBoostSheet(id){ if(!id) return; sheetMode = 'boost'; sheetId = id; renderSheet(); }
+function boostSheet(){
+  const l = byId(sheetId);
+  if(!l) return '';
+  return sheetFrame('ブーストについて', plainTop('🚀 ブースト（検討中の機能）'), `
+    <p class="lead">ブーストは、あなたの出品を、条件に合う飲食店に見つけてもらいやすくする機能です（提供開始に向けて検討中です）。</p>
+    <ul class="cv-legend" style="flex-direction:column;align-items:flex-start;gap:10px;list-style:none;padding:0;margin:0">
+      <li>お試しブースト　<b>¥300</b>（検討中の仮価格）</li>
+      <li>標準ブースト　<b>¥500</b>（検討中の仮価格）</li>
+      <li>長時間ブースト　<b>¥980</b>（検討中の仮価格）</li>
+    </ul>
+    <p class="cap">価格・掲載期間は正式には未確定です。条件に合う飲食店への表示順の中で優先度が上がるだけで、条件に合わない飲食店には表示されません。AIの仕入れ提案の内容（組み合わせ・数量・価格）を変えるものではなく、必ず売れることを保証するものでもありません。</p>
+    <p class="cap"><b>現在は決済の仕組みがまだ無いため、このボタンを押してもお支払いは発生しません。</b>申し込み内容を確認のうえ、正式な提供開始時に改めてご案内します。</p>
+    <button type="button" class="btn btn-main" data-boost-confirm="${h(l.id)}">この内容で申し込む</button>
   `);
 }
 // カードのドラッグ操作。縦スクロールは妨げず（touch-action:pan-y）、横方向だけ追従させる。
@@ -1415,6 +1441,7 @@ function renderSheet(){
   let html = '';
   if(sheetMode === 'menu' && sheetId) html = menuSheet();
   if(sheetMode === 'listing' && sheetId) html = listingSheet();
+  if(sheetMode === 'boost' && sheetId) html = boostSheet();
   if(!html){ closeSheet(); return; }
   const scrollTop = el.querySelector('.sheet')?.scrollTop || 0;
   el.innerHTML = html;
@@ -1631,7 +1658,8 @@ function resultView(){
       ${gatherViz(res.best, r.qty, u)}
       <div class="slip-sec">つながる生産者さん</div>
       <div>${slipCards(res.best,u)}</div>
-      <div class="total"><span>合計</span><span>${q(r.qty,u)}　${yen(res.best.cost)}</span></div>`;
+      <div class="total"><span>合計</span><span>${q(r.qty,u)}　${yen(res.best.cost)}</span></div>
+      <p class="cap">（参考）この仕入れが成立した場合の想定手数料：${yen(Math.round(res.best.cost * COMMISSION_RATE_REF))}（検討中の仮の手数料率${Math.round(COMMISSION_RATE_REF*100)}%・実際の請求は発生しません）</p>`;
   } else {
     verdict = {
       none: `条件に合う${r.item}の出品がありません`,
@@ -1780,7 +1808,7 @@ function farmCard(l){
     <div class="lc-top"><div class="face">${thumb(l)}</div>
       <div class="grow"><h3 style="font-size:18px">${h(l.item)}${l.variety?`<small class="muted" style="font-size:12.5px;margin-left:6px">${h(l.variety)}</small>`:''}</h3><div class="where">${whereLine(l)}</div></div>
       <div class="price"><b style="font-size:19px">¥${l.price.toLocaleString('ja-JP')}</b><span>/${h(l.unit)}</span></div></div>
-    <div class="tags">${listingStatus(l)}${l.own?'<span class="tag good">あなたの出品</span>':''}${l.grade==='規格外'?`<span class="tag">規格外・${h(l.reason)}</span>`:''}${l.surplus?'<span class="tag">余剰</span>':''}${l.demo?'<span class="tag">サンプル</span>':''}</div>
+    <div class="tags">${listingStatus(l)}${l.own?'<span class="tag good">あなたの出品</span>':''}${l.grade==='規格外'?`<span class="tag">規格外・${h(l.reason)}</span>`:''}${l.surplus?'<span class="tag">余剰</span>':''}${l.demo?'<span class="tag">サンプル</span>':''}${l.boostRequested?'<span class="tag">🚀 ブースト申し込み済み</span>':''}</div>
     <dl class="kv">
       <dt>受け渡し</dt><dd>${h(fmtDate(l.date))} ${h(l.from)}〜${h(l.to)}・${h(placeShort(l.place))}</dd>
       <dt>販売単位</dt><dd>最低${q(l.minQty,l.unit)}・${q(l.step,l.unit)}刻み</dd>
@@ -1796,7 +1824,7 @@ function farmCard(l){
       <button type="button" class="btn small btn-sub" data-save="${l.id}">数量を変更</button>
     </div>
     <div class="qty"><span class="sec-label">出荷日</span><input id="qd-${l.id}" type="date" min="${iso(today0())}" value="${h(l.date)}" aria-label="${h(l.farm)} ${h(l.item)}の出荷日" style="width:auto"><button type="button" class="btn small btn-sub" data-savedate="${l.id}">出荷日を変更</button></div>
-    <div class="row"><button type="button" class="btn small" data-edit="${l.id}">✏️ 出品内容を編集</button><button type="button" class="btn small danger" data-ldel="${l.id}">🗑 削除</button><button type="button" class="btn small${l.active ? ' danger' : ' btn-sub'}" data-toggle="${l.id}">${l.active ? '公開を止める' : '公開を再開する'}</button></div>` : '<p class="cap" style="margin:0">変更できるのは、出品した農家（ログイン中）と管理者だけです。</p>'}
+    <div class="row"><button type="button" class="btn small" data-edit="${l.id}">✏️ 出品内容を編集</button><button type="button" class="btn small danger" data-ldel="${l.id}">🗑 削除</button><button type="button" class="btn small${l.active ? ' danger' : ' btn-sub'}" data-toggle="${l.id}">${l.active ? '公開を止める' : '公開を再開する'}</button><button type="button" class="btn small btn-sub" data-boost="${l.id}">🚀 ${l.boostRequested ? 'ブーストの申し込みを取り下げる' : 'ブーストについて'}</button></div>` : '<p class="cap" style="margin:0">変更できるのは、出品した農家（ログイン中）と管理者だけです。</p>'}
   </article>`;
 }
 // 出品の状態：公開中／公開停止中／在庫なし／受け渡し日を過ぎています
@@ -2229,6 +2257,31 @@ document.addEventListener('click', ev => {
       if(!res) return;
       const now = byId(lid); flashId = lid; render();
       toast(now && now.active ? `${who}の${item}の公開を再開しました` : `${who}の${item}の公開を止めました（仕入れ案に使われなくなります）`, toPlan(item));
+    });
+    return;
+  }
+  if(ds.boost){
+    const l = byId(ds.boost); if(!l) return;
+    if(l.boostRequested){
+      if(!armed(t, 'もう一度押すと取り下げます')) return;
+      t.disabled = true;
+      mutate({op:'boost-request', id:l.id, requested:false}).then(res => {
+        t.disabled = false;
+        if(!res) return;
+        flashId = l.id; render();
+        toast('ブーストの申し込みを取り下げました');
+      });
+    } else openBoostSheet(l.id);
+    return;
+  }
+  if(ds.boostConfirm){
+    const l = byId(ds.boostConfirm); if(!l) return;
+    t.disabled = true;
+    mutate({op:'boost-request', id:l.id, requested:true}).then(res => {
+      t.disabled = false;
+      if(!res) return;
+      closeSheet(); flashId = l.id; render();
+      toast('申し込みを受け付けました。まだお支払いは発生していません', null, 'ok');
     });
     return;
   }
