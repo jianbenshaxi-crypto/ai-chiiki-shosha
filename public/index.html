@@ -151,7 +151,7 @@ main.enter{animation:fadeUp .4s cubic-bezier(.2,.8,.2,1) both}
 .role-tile:hover{transform:translateY(-4px);box-shadow:var(--shadow-lift);border-color:color-mix(in srgb,var(--green) 25%,var(--line))}
 .role-tile .role-k{font-family:var(--f-num);font-size:10.5px;font-weight:600;letter-spacing:.2em;color:var(--ink-3);white-space:nowrap}
 .role-tile .role-ic{width:50px;height:50px;border-radius:16px;display:flex;align-items:center;justify-content:center;font-size:26px}
-.role-tile .role-t{font-family:var(--f-display);font-weight:800;font-size:clamp(14px,4.3vw,19px);line-height:1.4;letter-spacing:.01em;white-space:nowrap}
+.role-tile .role-t{font-family:var(--f-display);font-weight:800;font-size:clamp(14px,4.3vw,19px);line-height:1.4;letter-spacing:.01em;white-space:normal;overflow-wrap:break-word}
 .role-tile .role-s{font-size:12.5px;font-weight:700;color:var(--ink-3);margin-top:auto}
 .role-tile .role-go{position:absolute;right:14px;bottom:14px;width:36px;height:36px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:var(--green);color:var(--green-ink);font-size:17px;font-weight:700;transition:transform .2s var(--ease)}
 .role-tile:hover .role-go{transform:translateX(3px)}
@@ -214,7 +214,9 @@ main.enter{animation:fadeUp .4s cubic-bezier(.2,.8,.2,1) both}
 .swipe-card:not(.behind){animation:cardIn .42s var(--ease) both}
 @keyframes cardIn{from{transform:scale(.94) translateY(16px);opacity:.85}to{transform:none;opacity:1}}
 .swipe-card:active{cursor:grabbing}
-.swipe-card.behind{transform:scale(.94) translateY(16px);box-shadow:var(--shadow);opacity:.85}
+.swipe-card.behind{transform:scale(.94) translateY(16px);box-shadow:var(--shadow);opacity:.85;pointer-events:none}
+.swipe-card.behind .peek{display:none}
+.swipe-card.lift{box-shadow:0 30px 60px -24px rgba(29,77,58,.5);cursor:grabbing}
 .swipe-card .img{flex:1;min-height:0;font-size:140px}
 .swipe-card .img .tags{position:absolute;left:16px;top:16px;right:16px;z-index:1}
 .swipe-card .img .tag{background:rgba(255,253,248,.92);backdrop-filter:blur(4px);font-size:12.5px;padding:4px 12px}
@@ -1168,11 +1170,13 @@ function marcheList(){
   return filtered;
 }
 // スワイプで1枚ずつ確認するデッキ。カードのドラッグ・ボタン操作はbindDeck()で別途つなぐ。
+// behindのカードも同じ構造（スタンプ・ヒントを含む）で描画し、CSSで隠す。
+// 前面に昇格するときはクラスを外すだけでよく、作り直さずに滑らかにアニメーションできる。
 function swipeCard(l, behind){
   const dist = placeDistText(l.place);
   return `<article class="swipe-card${behind ? ' behind' : ''}" style="--t:${tint(l.item)}" data-swipe-id="${h(l.id)}"${behind ? ' aria-hidden="true"' : ''}>
     <div class="img produce">${thumb(l)}<div class="tags">${prodTags(l)}</div>
-      ${behind ? '' : '<div class="swipe-stamp like" data-stamp="like">いいね</div><div class="swipe-stamp skip" data-stamp="skip">スキップ</div><span class="peek" aria-hidden="true">タップで詳細</span>'}
+      <div class="swipe-stamp like" data-stamp="like">いいね</div><div class="swipe-stamp skip" data-stamp="skip">スキップ</div><span class="peek" aria-hidden="true">タップで詳細</span>
     </div>
     <div class="body">
       <h3>${h(l.item)}${l.variety ? `<small>${h(l.variety)}</small>` : ''}</h3>
@@ -1186,13 +1190,16 @@ function swipeCard(l, behind){
     </div>
   </article>`;
 }
+function deckCountHtml(list){
+  return `<div class="deck-count" aria-live="polite"><span>${marcheIdx + 1} / ${list.length}</span><span class="prog" aria-hidden="true"><i style="width:${Math.round((marcheIdx + 1) / list.length * 100)}%"></i></span></div>`;
+}
 function deckHtml(){
   const list = marcheList();
   if(!list.length) return `<div class="deck-empty"><div class="big" aria-hidden="true">🧺</div><p class="cap">条件に合う出品が見つかりません。絞り込みを変えてみてください。</p></div>`;
   if(marcheIdx >= list.length) return `<div class="deck-empty"><div class="big" aria-hidden="true">🎉</div><p>ここまでの食材をすべて確認しました。</p><button type="button" class="btn btn-sub" id="mk-restart">もう一度最初から見る</button></div>`;
   const l = list[marcheIdx], next = list[marcheIdx + 1];
   return `<div class="deck-wrap">
-    <div class="deck-count" aria-live="polite"><span>${marcheIdx + 1} / ${list.length}</span><span class="prog" aria-hidden="true"><i style="width:${Math.round((marcheIdx + 1) / list.length * 100)}%"></i></span></div>
+    ${deckCountHtml(list)}
     <div class="deck" id="mk-deck">${next ? swipeCard(next, true) : ''}${swipeCard(l, false)}</div>
     <div class="swipe-actions">
       <div class="act-wrap"><button type="button" id="mk-skip" aria-label="スキップ" class="skip-btn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/></svg></button><span class="lbl" aria-hidden="true">スキップ</span></div>
@@ -1203,14 +1210,31 @@ function deckHtml(){
 }
 // いいね・スキップの確定処理。animate=trueのときだけ、カードが飛んでいく見た目をつける
 // （シートから閉じて進める場合は、カードが隠れているのでアニメーションなしで進める）。
+// 背後のカードがあれば作り直さず、クラスを外すだけで前面へなめらかに昇格させる。
 function advanceDeck(dir){
-  const doAdvance = () => { marcheIdx++; const o = $('#mk-out'); if(o){ o.innerHTML = deckHtml(); bindDeck(); } };
-  const card = dir ? document.querySelector('#mk-deck .swipe-card:not(.behind)') : null;
-  if(card){
-    card.style.transform = `translateX(${dir*600}px) rotate(${dir*24}deg)`;
-    card.style.opacity = '0';
-    setTimeout(doAdvance, 260);
-  } else doAdvance();
+  const deck = $('#mk-deck');
+  const front = deck && deck.querySelector('.swipe-card:not(.behind)');
+  const behind = deck && deck.querySelector('.swipe-card.behind');
+  const commit = () => {
+    marcheIdx++;
+    if(front) front.remove();
+    if(behind){
+      behind.classList.remove('behind', 'lift');
+      behind.removeAttribute('aria-hidden');
+      behind.style.pointerEvents = '';
+      const list = marcheList(), nx = list[marcheIdx + 1];
+      if(nx) deck.insertAdjacentHTML('afterbegin', swipeCard(nx, true));
+      const cnt = $('.deck-count'); if(cnt) cnt.outerHTML = deckCountHtml(list);
+      bindDeck();
+    } else {
+      const o = $('#mk-out'); if(o){ o.innerHTML = deckHtml(); bindDeck(); }
+    }
+  };
+  if(dir && front){
+    front.style.transform = `translateX(${dir*600}px) rotate(${dir*22}deg)`;
+    front.style.opacity = '0';
+    setTimeout(commit, 260);
+  } else commit();
 }
 function likeCurrent(animate){
   const list = marcheList(), l = list[marcheIdx];
@@ -1244,6 +1268,7 @@ function bindDeck(){
   card.addEventListener('pointerdown', (e) => {
     dragging = true; moved = false; startX = e.clientX; startY = e.clientY; dx = 0;
     card.style.transition = 'none';
+    card.classList.add('lift');
     try { card.setPointerCapture(e.pointerId); } catch(err) {}
   });
   card.addEventListener('pointermove', (e) => {
@@ -1258,6 +1283,7 @@ function bindDeck(){
     if(!dragging) return;
     dragging = false;
     card.style.transition = '';
+    card.classList.remove('lift');
     if(dx > THRESHOLD) likeCurrent(true);
     else if(dx < -THRESHOLD) skipCurrent(true);
     else {
