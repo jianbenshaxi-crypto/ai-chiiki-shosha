@@ -1123,8 +1123,8 @@ function prodTags(l){
     lowStock(l) ? '<span class="tag hot">残りわずか</span>' : '',
     l.grade === '規格外' ? `<span class="tag">規格外</span>` : '',
     l.surplus ? '<span class="tag">余剰</span>' : '',
-    // AIが選んだという意味ではなく、農家本人が掲載を希望している、という事実だけを伝える
-    l.boostRequested ? '<span class="tag">🚀 農家が掲載を希望</span>' : ''
+    // AIが選んだという意味ではなく、農家本人が掲載を希望している、という事実だけを伝える。「PR」で広告枠であることを明示する
+    l.boostRequested ? '<span class="tag">🚀 PR・農家が掲載を希望</span>' : ''
   ].join('');
 }
 // 写真は扱わない。野菜のイラストで表示する

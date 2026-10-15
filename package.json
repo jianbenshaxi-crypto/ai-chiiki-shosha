@@ -4,6 +4,9 @@
   "private": true,
   "description": "AI地域商社：分散した小さな供給を、飲食店が使える1つの仕入れ案に変換するMVP",
   "type": "module",
+  "scripts": {
+    "check": "node scripts/check.mjs"
+  },
   "engines": {
     "node": ">=20"
   }
